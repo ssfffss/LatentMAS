@@ -35,7 +35,8 @@ class TextMASMethod:
         self.method_name = "text_mas"
         self.task = args.task
 
-        # 初始化基础设施监控器
+        # 初始化基础设施监控器 - 添加功耗监控参数
+        args.enable_power_monitoring = getattr(args, 'enable_power_monitoring', True)
         self.monitor = InfrastructureMonitor(args, method_name=self.method_name)
         
     def run_batch(self, items: List[Dict]) -> List[Dict]:
@@ -54,7 +55,7 @@ class TextMASMethod:
         tokens_processed_total = 0  # 总处理token数
 
         try:
-            for step_idx, agent in self.agents:
+            for step_idx, agent in enumerate(self.agents):
                 step_start_time = time.time()
                 step_input_data = None
                 step_output_data = None

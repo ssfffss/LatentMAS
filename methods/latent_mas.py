@@ -91,6 +91,7 @@ class LatentMASMethod:
         final_texts = ["" for _ in range(batch_size)]
 
         ## initialize infrastructure monitor
+        self.args.enable_power_monitoring = getattr(self.args, 'enable_power_monitoring', True)
         monitor = InfrastructureMonitor(self.args, method_name=self.method_name)
         monitor.start_monitoring()
         experiment_start_time = time.time()
