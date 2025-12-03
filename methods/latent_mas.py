@@ -1,5 +1,7 @@
+import time
 from typing import Dict, List, Optional, Tuple
 
+from util.infrastructure_monitor import InfrastructureMonitor
 from . import default_agents
 from models import ModelWrapper, _past_length
 from prompts import build_agent_message_sequential_latent_mas, build_agent_message_hierarchical_latent_mas
@@ -88,165 +90,326 @@ class LatentMASMethod:
         agent_traces: List[List[Dict]] = [[] for _ in range(batch_size)]
         final_texts = ["" for _ in range(batch_size)]
 
-        for agent in self.agents:
+        ## initialize infrastructure monitor
+        monitor = InfrastructureMonitor(self.args, method_name=self.method_name)
+        monitor.start_monitoring()
+        experiment_start_time = time.time()
 
-            if self.args.prompt == "sequential":
-                batch_messages = [
-                    build_agent_message_sequential_latent_mas(role=agent.role, question=item["question"], context="", method=self.method_name, args=self.args)
-                    for item in items
-                ]
-            elif self.args.prompt == "hierarchical":
-                batch_messages = [
-                    build_agent_message_hierarchical_latent_mas(role=agent.role, question=item["question"], context="", method=self.method_name, args=self.args)
-                    for item in items
-                ]
+        try:
 
+            for list_idx, agent in enumerate(self.agents):
+                step_start_time = time.time()
+                step_input_data = None
+                step_output_data = None
+                step_latent_vectors = None
+                step_kv_cache_size = 0.0
 
-            prompts, input_ids, attention_mask, tokens_batch = self.model.prepare_chat_batch(
-                batch_messages, add_generation_prompt=True
-            )
+                if self.args.prompt == "sequential":
+                    batch_messages = [
+                        build_agent_message_sequential_latent_mas(role=agent.role, question=item["question"], context="", method=self.method_name, args=self.args)
+                        for item in items
+                    ]
+                elif self.args.prompt == "hierarchical":
+                    batch_messages = [
+                        build_agent_message_hierarchical_latent_mas(role=agent.role, question=item["question"], context="", method=self.method_name, args=self.args)
+                        for item in items
+                    ]
 
-            if agent.role != "judger":
-                prev_past_len = _past_length(past_kv)
-
-                if self.args.think:
-                        wrapped_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else: 
-                    wrapped_prompts = prompts
-
-                wrapped_encoded = self.model.tokenizer(
-                    wrapped_prompts,
-                    return_tensors="pt",
-                    padding=True,
-                    add_special_tokens=False,
+                prompts, input_ids, attention_mask, tokens_batch = self.model.prepare_chat_batch(
+                    batch_messages, add_generation_prompt=True
                 )
-                wrapped_ids = wrapped_encoded["input_ids"].to(self.model.device)
-                wrapped_mask = wrapped_encoded["attention_mask"].to(self.model.device)
-                wrapped_tokens_batch: List[List[str]] = []
-                for ids_row, mask_row in zip(wrapped_ids, wrapped_mask):
-                    active_ids = ids_row[mask_row.bool()].tolist()
-                    wrapped_tokens_batch.append(self.model.tokenizer.convert_ids_to_tokens(active_ids))
 
-                past_kv = self.model.generate_latent_batch(
-                    wrapped_ids,
-                    attention_mask=wrapped_mask,
-                    latent_steps=self.latent_steps,
-                    past_key_values=past_kv,
-                )
-                if self.sequential_info_only or self.latent_only:
-                    new_past_len = _past_length(past_kv)
-                    tokens_added = new_past_len - prev_past_len
-                    tokens_to_keep = self.latent_steps if self.latent_only else tokens_added
-                    past_kv = self._truncate_past(past_kv, tokens_to_keep)
+                steps_token_processed = attention_mask.sum().item()
 
-                for idx in range(batch_size):
-                    mask = wrapped_mask[idx].bool()
-                    trimmed_ids = wrapped_ids[idx][mask].to("cpu").tolist()
-                    agent_traces[idx].append(
-                        {
-                            "name": agent.name,
-                            "role": agent.role,
-                            "input": wrapped_prompts[idx],
-                            "input_ids": trimmed_ids,
-                            "input_tokens": wrapped_tokens_batch[idx],
-                            "latent_steps": self.latent_steps,
-                            "output": "",
-                        }
+                if agent.role != "judger":
+                    prev_past_len = _past_length(past_kv)
+
+                    if self.args.think:
+                            wrapped_prompts = [f"{prompt}<think>" for prompt in prompts]
+                    else: 
+                        wrapped_prompts = prompts
+
+                    wrapped_encoded = self.model.tokenizer(
+                        wrapped_prompts,
+                        return_tensors="pt",
+                        padding=True,
+                        add_special_tokens=False,
                     )
-            else:
+                    wrapped_ids = wrapped_encoded["input_ids"].to(self.model.device)
+                    wrapped_mask = wrapped_encoded["attention_mask"].to(self.model.device)
+                    wrapped_tokens_batch: List[List[str]] = []
+                    for ids_row, mask_row in zip(wrapped_ids, wrapped_mask):
+                        active_ids = ids_row[mask_row.bool()].tolist()
+                        wrapped_tokens_batch.append(self.model.tokenizer.convert_ids_to_tokens(active_ids))
 
-                past_for_decoding = past_kv if self.latent_steps > 0 else None
+                    torch.cuda.reset_peak_memory_stats()
+                    step_inference_start = time.time()
 
-                if self.args.think:
-                        judger_prompts = [f"{prompt}<think>" for prompt in prompts]
-                else: 
-                    judger_prompts = prompts
-                
-                judger_encoded = self.model.tokenizer(
-                    judger_prompts,
-                    return_tensors="pt",
-                    padding=True,
-                    add_special_tokens=False,
-                )
-                judger_ids = judger_encoded["input_ids"].to(self.model.device)
-                judger_mask = judger_encoded["attention_mask"].to(self.model.device)
-                judger_tokens_batch: List[List[str]] = []
-                for ids_row, mask_row in zip(judger_ids, judger_mask):
-                    active_ids = ids_row[mask_row.bool()].tolist()
-                    judger_tokens_batch.append(self.model.tokenizer.convert_ids_to_tokens(active_ids))
-                generated_batch, _ = self.model.generate_text_batch(
-                    judger_ids,
-                    judger_mask,
-                    max_new_tokens=self.judger_max_new_tokens,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    past_key_values=past_for_decoding,
-                )
-                for idx in range(batch_size):
-                    final_text = generated_batch[idx].strip()
-                    final_texts[idx] = final_text
-                    mask = judger_mask[idx].bool()
-                    trimmed_ids = judger_ids[idx][mask].to("cpu").tolist()
-                    agent_traces[idx].append(
-                        {
-                            "name": agent.name,
-                            "role": agent.role,
-                            "input": judger_prompts[idx],
-                            "input_ids": trimmed_ids,
-                            "input_tokens": judger_tokens_batch[idx],
-                            "output": final_text,
-                        }
+                    past_kv = self.model.generate_latent_batch(
+                        wrapped_ids,
+                        attention_mask=wrapped_mask,
+                        latent_steps=self.latent_steps,
+                        past_key_values=past_kv,
                     )
 
-        results: List[Dict] = []
-        for idx, item in enumerate(items):
-            final_text = final_texts[idx]
-            if self.task in ['mbppplus', 'humanevalplus']:
-                pred = extract_markdown_python_block(final_text)
-                gold = item.get("gold", "")
+                    step_inference_time = time.time() - step_inference_start
+                    
+                    # 计算额外处理的token数
+                    if hasattr(self.model, 'last_tokens_processed'):
+                        step_tokens_processed += self.model.last_tokens_processed
+                    
+                    tokens_processed_total += step_tokens_processed
 
-                if pred is None:
-                    ok = False
-                    error_msg = "python error: No python code block found"
+                    if self.sequential_info_only or self.latent_only:
+                        new_past_len = _past_length(past_kv)
+                        tokens_added = new_past_len - prev_past_len
+                        tokens_to_keep = self.latent_steps if self.latent_only else tokens_added
+                        past_kv = self._truncate_past(past_kv, tokens_to_keep)
+
+                    for idx in range(batch_size):
+                        mask = wrapped_mask[idx].bool()
+                        trimmed_ids = wrapped_ids[idx][mask].to("cpu").tolist()
+                        agent_traces[idx].append(
+                            {
+                                "name": agent.name,
+                                "role": agent.role,
+                                "input": wrapped_prompts[idx],
+                                "input_ids": trimmed_ids,
+                                "input_tokens": wrapped_tokens_batch[idx],
+                                "latent_steps": self.latent_steps,
+                                "output": "",
+                            }
+                        )
+                    
+                    # 记录latent vectors用于功耗分析
+                    if hasattr(self.model, 'last_latent_vectors'):
+                        step_latent_vectors = self.model.last_latent_vectors
+                    
+                    # 获取KV缓存大小
+                    if past_kv is not None:
+                        step_kv_cache_size = sum(
+                            sum(p.numel() * p.element_size() for p in layer) 
+                            for layer in past_kv
+                        ) / (1024**3)  # GB
+                    
+                    # 记录Agent通信指标（包含功耗）
+                    monitor.record_agent_communication(
+                        agent_name=agent.name,
+                        role=agent.role,
+                        step_idx=list_idx,
+                        batch_size=batch_size,
+                        input_data=batch_messages,
+                        output_data="latent_thoughts",  # latent输出
+                        latent_vectors=step_latent_vectors,
+                        kv_cache_size=step_kv_cache_size,
+                        inference_time=step_inference_time,
+                        tokens_processed=step_tokens_processed,
+                        samples_processed=batch_size
+                    )
                 else:
-                    python_code_to_exe = pred + "\n" + gold
-                    ok, error_msg = run_with_timeout(python_code_to_exe, timeout=10)
+                    past_for_decoding = past_kv if self.latent_steps > 0 else None
+
+                    if self.args.think:
+                            judger_prompts = [f"{prompt}<think>" for prompt in prompts]
+                    else: 
+                        judger_prompts = prompts
+                    
+                    judger_encoded = self.model.tokenizer(
+                        judger_prompts,
+                        return_tensors="pt",
+                        padding=True,
+                        add_special_tokens=False,
+                    )
+                    judger_ids = judger_encoded["input_ids"].to(self.model.device)
+                    judger_mask = judger_encoded["attention_mask"].to(self.model.device)
+                    judger_tokens_batch: List[List[str]] = []
+                    for ids_row, mask_row in zip(judger_ids, judger_mask):
+                        active_ids = ids_row[mask_row.bool()].tolist()
+                        judger_tokens_batch.append(self.model.tokenizer.convert_ids_to_tokens(active_ids))
+
+                    # 记录推理前的状态
+                    torch.cuda.reset_peak_memory_stats()
+                    step_inference_start = time.time()
+                    generated_batch, _ = self.model.generate_text_batch(
+                        judger_ids,
+                        judger_mask,
+                        max_new_tokens=self.judger_max_new_tokens,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        past_key_values=past_for_decoding,
+                    )
+
+                    step_inference_time = time.time() - step_inference_start
                 
-                print(f'=========================================')
-                print(f'Question {idx}')
-                print(f'error_msg: {error_msg}')
-                # print(f'=========================================')
+                    # 计算生成的token数
+                    generated_tokens = sum(len(text.split()) for text in generated_batch)
+                    step_tokens_processed += generated_tokens
+                    tokens_processed_total += step_tokens_processed
 
-            elif self.task in ["aime2024", "aime2025"]:
-                pred = normalize_answer(extract_gsm8k_answer(final_text))
-                gold = str(item.get("gold", "")).strip()
-                try:
-                    pred_int = int(pred)
-                    gold_int = int(gold)
-                    ok = (pred_int == gold_int)
+                    for idx in range(batch_size):
+                        final_text = generated_batch[idx].strip()
+                        final_texts[idx] = final_text
+                        mask = judger_mask[idx].bool()
+                        trimmed_ids = judger_ids[idx][mask].to("cpu").tolist()
+                        agent_traces[idx].append(
+                            {
+                                "name": agent.name,
+                                "role": agent.role,
+                                "input": judger_prompts[idx],
+                                "input_ids": trimmed_ids,
+                                "input_tokens": judger_tokens_batch[idx],
+                                "output": final_text,
+                            }
+                        )
+                    step_output_data = final_texts
+                    step_input_data = judger_prompts
+
+                    # 获取KV缓存大小
+                    if past_kv is not None:
+                        step_kv_cache_size = sum(
+                            sum(p.numel() * p.element_size() for p in layer) 
+                            for layer in past_kv
+                        ) / (1024**3)  # GB
+
+                    # 记录Judger通信指标（包含功耗）
+                    monitor.record_agent_communication(
+                        agent_name=agent.name,
+                        role=agent.role,
+                        step_idx=list_idx,
+                        batch_size=batch_size,
+                        input_data=judger_prompts,
+                        output_data=generated_batch,
+                        latent_vectors=None,  # Text输出
+                        kv_cache_size=step_kv_cache_size,
+                        inference_time=step_inference_time,
+                        tokens_processed=step_tokens_processed,
+                        samples_processed=batch_size
+                    )
+                
+                # compute the agent inference time
+                step_time = time.time() - step_start_time
+                
+                # estimate the number of tokens processed
+                tokens_processed = 0
+                if hasattr(self.model, 'last_tokens_processed'):
+                    tokens_processed = self.model.last_tokens_processed
+                
+                # 记录Agent通信指标
+                monitor.record_agent_communication(
+                    agent_name=agent.name,
+                    role=agent.role,
+                    step_idx=list_idx,
+                    batch_size=batch_size,
+                    input_data=step_input_data,
+                    output_data=step_output_data,
+                    latent_vectors=step_latent_vectors,
+                    kv_cache_size=step_kv_cache_size,
+                    inference_time=step_time,
+                    tokens_processed=tokens_processed
+                )
+
+            results: List[Dict] = []
+            for idx, item in enumerate(items):
+                final_text = final_texts[idx]
+                if self.task in ['mbppplus', 'humanevalplus']:
+                    pred = extract_markdown_python_block(final_text)
+                    gold = item.get("gold", "")
+
+                    if pred is None:
+                        ok = False
+                        error_msg = "python error: No python code block found"
+                    else:
+                        python_code_to_exe = pred + "\n" + gold
+                        ok, error_msg = run_with_timeout(python_code_to_exe, timeout=10)
+                    
+                    print(f'=========================================')
+                    print(f'Question {idx}')
+                    print(f'error_msg: {error_msg}')
+                    # print(f'=========================================')
+
+                elif self.task in ["aime2024", "aime2025"]:
+                    pred = normalize_answer(extract_gsm8k_answer(final_text))
+                    gold = str(item.get("gold", "")).strip()
+                    try:
+                        pred_int = int(pred)
+                        gold_int = int(gold)
+                        ok = (pred_int == gold_int)
+                        error_msg = None
+                    except ValueError:
+                        ok = False
+                        error_msg = f'Value error in parsing answer. Pred: {pred}, Gold: {gold}'
+
+                else:
+                    pred = normalize_answer(extract_gsm8k_answer(final_text))
+                    gold = item.get("gold", "")
+                    ok = (pred == gold) if (pred and gold) else False
                     error_msg = None
-                except ValueError:
-                    ok = False
-                    error_msg = f'Value error in parsing answer. Pred: {pred}, Gold: {gold}'
-
-            else:
-                pred = normalize_answer(extract_gsm8k_answer(final_text))
-                gold = item.get("gold", "")
-                ok = (pred == gold) if (pred and gold) else False
-                error_msg = None
+                
+                results.append(
+                    {
+                        "question": item["question"],
+                        "gold": gold,
+                        "solution": item["solution"],
+                        "prediction": pred,
+                        "raw_prediction": final_text,
+                        "agents": agent_traces[idx],
+                        "correct": ok,
+                    }
+                )
             
-            results.append(
-                {
-                    "question": item["question"],
-                    "gold": gold,
-                    "solution": item["solution"],
-                    "prediction": pred,
-                    "raw_prediction": final_text,
-                    "agents": agent_traces[idx],
-                    "correct": ok,
-                }
+            # 计算整体实验时间
+            total_time = time.time() - experiment_start_time
+            
+            # 停止监控并保存指标
+            monitor.stop_monitoring()
+            
+            # 生成实验名称
+            experiment_name = f"{self.method_name}_{self.args.model_name.split('/')[-1]}_{self.task}_{batch_size}"
+            
+            # 保存指标
+            metrics_path = monitor.save_metrics(
+                output_dir=getattr(self.args, 'metrics_output_dir', 'metrics'),
+                experiment_name=experiment_name
             )
-        return results
+            
+            # 打印摘要统计
+            summary_stats = monitor.get_summary_statistics()
+            print("\n" + "="*50)
+            print(f"Infrastructure Metrics Summary for {self.method_name}")
+            print("="*50)
+            for dimension, stats in summary_stats.items():
+                print(f"\n{dimension.upper()} METRICS:")
+                for metric_name, values in stats.items():
+                    if values['count'] > 0:
+                        print(f"  {metric_name}:")
+                        print(f"    mean: {values['mean']:.4f}")
+                        print(f"    std:  {values['std']:.4f}")
+                        print(f"    min:  {values['min']:.4f}")
+                        print(f"    max:  {values['max']:.4f}")
+            
+            print(f"\nTotal experiment time: {total_time:.2f} seconds")
+            print(f"Metrics saved to: {metrics_path}")
+            print("="*50)
+
+            # 打印功耗摘要
+            power_summary = monitor.get_power_summary()
+            if power_summary:
+                print("\n" + "="*60)
+                print(f"POWER CONSUMPTION SUMMARY for {self.method_name}")
+                print("="*60)
+                print(f"Total Energy Consumed: {power_summary['total_energy_consumed']:.2f} J")
+                print(f"Average Power Draw: {power_summary['avg_power_draw']:.2f} W")
+                print(f"Peak Power Draw: {power_summary['peak_power_draw']:.2f} W")
+                print(f"GPU Energy Fraction: {power_summary['gpu_energy_fraction']*100:.1f}%")
+                print(f"Tokens per Joule: {power_summary['avg_tokens_per_joule']:.2f}")
+                print(f"Samples per Joule: {power_summary['avg_samples_per_joule']:.2f}")
+                print(f"Total Tokens Processed: {tokens_processed_total}")
+                print(f"Energy per Sample: {power_summary['total_energy_consumed']/len(items):.2f} J/sample")
+                print("="*60)
+
+            return results
+        finally:
+            monitor.stop_monitoring()
     
     def run_batch_vllm(self, items: List[Dict]) -> List[Dict]:
         if len(items) > self.generate_bs:

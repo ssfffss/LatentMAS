@@ -37,11 +37,15 @@ class ModelWrapper:
         self._latent_realign_matrices: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
         self.args = args
 
+        # metrics for the infrastructure monitor
+        self.last_tokens_processed = 0
+        self.last_latent_vectors = None
+        self.last_kv_cache_size = 0
+
         # for ablation
         self.pre_aligned = None
 
         if self.use_vllm:
-            
             tp_size = max(1, int(getattr(args, "tensor_parallel_size", 1)))
             gpu_util = float(getattr(args, "gpu_memory_utilization", 0.9))
             
@@ -264,6 +268,8 @@ class ModelWrapper:
             generated_ids = sequences[idx, length:]
             text = self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
             generations.append(text)
+
+        self.last_tokens_processed = input_ids.numel() + len(generations)
         return generations, outputs.past_key_values
 
     def tokenize_text(self, text: str) -> torch.Tensor:
@@ -346,6 +352,19 @@ class ModelWrapper:
             )
             past = outputs.past_key_values
             last_hidden = outputs.hidden_states[-1][:, -1, :]
+
+        self.last_tokens_processed = input_ids.numel()
+        
+        # 记录latent vectors
+        if hasattr(self.model, 'hidden_states') and self.model.hidden_states is not None:
+            self.last_latent_vectors = last_hidden
+        
+        # 记录KV缓存大小
+        if past is not None:
+            self.last_kv_cache_size = sum(
+                sum(p.numel() * p.element_size() for p in layer) 
+                for layer in past
+            ) / (1024**3)  # GB
 
         return past
     
