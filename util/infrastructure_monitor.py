@@ -11,6 +11,8 @@ import threading
 import queue
 from collections import defaultdict
 
+from util.infrastructure_analyzer import convert_numpy_types
+
 @dataclass
 class ComputeMetrics:
     gpu_util: float = 0.0
@@ -581,7 +583,7 @@ class InfrastructureMonitor:
         }
     
     def get_summary_statistics(self) -> Dict[str, Dict]:
-        """获取摘要统计信息"""
+        """获取摘要统计信息 - 修复NumPy序列化问题"""
         summary = {
             'compute': {},
             'memory': {},
@@ -600,6 +602,7 @@ class InfrastructureMonitor:
                 summary_stats = {}
                 for column in df.columns:
                     if pd.api.types.is_numeric_dtype(df[column]):
+                        # 确保转换为Python原生类型
                         summary_stats[column] = {
                             'mean': float(df[column].mean()),
                             'std': float(df[column].std()),
@@ -610,4 +613,5 @@ class InfrastructureMonitor:
                 
                 summary[dimension] = summary_stats
         
-        return summary
+        # 使用转换函数确保可序列化
+        return convert_numpy_types(summary)

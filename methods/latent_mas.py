@@ -104,6 +104,7 @@ class LatentMASMethod:
                 step_output_data = None
                 step_latent_vectors = None
                 step_kv_cache_size = 0.0
+                steps_token_processed = 0.0
 
                 if self.args.prompt == "sequential":
                     batch_messages = [

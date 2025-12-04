@@ -1,3 +1,4 @@
+import datetime
 import json
 from typing import Dict, List
 import numpy as np
@@ -7,6 +8,67 @@ import seaborn as sns
 from pathlib import Path
 from collections import defaultdict
 import math
+
+
+def convert_numpy_types(obj):
+    """
+    递归地将NumPy数据类型转换为Python原生类型，使其可JSON序列化
+    
+    Args:
+        obj: 任何Python对象
+        
+    Returns:
+        转换后的对象，所有NumPy类型都被转换为Python原生类型
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_numpy_types(item) for item in obj)
+    elif isinstance(obj, set):
+        return {convert_numpy_types(item) for item in obj}
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    elif hasattr(obj, '__dict__'):
+        # 处理自定义对象
+        return convert_numpy_types(obj.__dict__)
+    elif obj is None or isinstance(obj, (int, float, str, bool)):
+        return obj
+    else:
+        # 对于其他类型，尝试转换为字符串
+        try:
+            return str(obj)
+        except:
+            return "unserializable_object"
+
+
+class NumpyJSONEncoder(json.JSONEncoder):
+    """自定义JSON编码器，支持NumPy数据类型"""
+    
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        elif hasattr(obj, '__dict__'):
+            return obj.__dict__
+        return super().default(obj)
+
 
 class InfrastructureAnalyzer:
     def __init__(self, metrics_dir: str = "metrics"):
@@ -248,11 +310,13 @@ class InfrastructureAnalyzer:
             ax.set_title(f'Storage Breakdown ({method})')
     
     def generate_detailed_report(self):
-        """生成详细报告"""
+        """生成详细报告 - 修复NumPy序列化问题"""
         report = {
             'summary': {},
             'method_comparisons': {},
-            'recommendations': []
+            'recommendations': [],
+            'generated_at': datetime.now().isoformat(),
+            'analysis_version': '1.0'
         }
         
         # 计算方法对比
@@ -265,16 +329,19 @@ class InfrastructureAnalyzer:
             # 提取所有指标
             all_metrics = defaultdict(list)
             for exp in experiments:
-                for dimension in ['compute', 'memory', 'network', 'storage']:
+                for dimension in ['compute', 'memory', 'network', 'storage', 'power']:
                     if dimension in exp['overall_metrics']:
                         for metric in exp['overall_metrics'][dimension]:
                             for key, value in metric.items():
-                                if isinstance(value, (int, float)):
+                                if isinstance(value, (int, float, np.number)):
                                     all_metrics[f"{dimension}_{key}"].append(value)
             
             # 计算统计摘要
             for metric_name, values in all_metrics.items():
                 if values:
+                    # 确保values是Python原生类型
+                    values = [float(v) if isinstance(v, np.floating) else int(v) if isinstance(v, np.integer) else v for v in values]
+                    
                     method_stats[method][metric_name] = {
                         'mean': np.mean(values),
                         'std': np.std(values),
@@ -283,8 +350,8 @@ class InfrastructureAnalyzer:
                         'count': len(values)
                     }
         
-        # 生成对比和建议
-        report['method_comparisons'] = method_stats
+        # 将method_stats转换为可序列化格式
+        report['method_comparisons'] = convert_numpy_types(method_stats)
         
         # 生成建议
         if method_stats:
@@ -295,49 +362,55 @@ class InfrastructureAnalyzer:
                 latent_method = latent_methods[0]
                 text_method = text_methods[0]
                 
-                # 比较关键指标
-                latent_compute = method_stats[latent_method].get('compute_inference_time', {}).get('mean', float('inf'))
-                text_compute = method_stats[text_method].get('compute_inference_time', {}).get('mean', float('inf'))
+                # 比较关键指标 - 确保转换为Python原生类型
+                latent_compute = float(method_stats[latent_method].get('compute_inference_time', {}).get('mean', float('inf')))
+                text_compute = float(method_stats[text_method].get('compute_inference_time', {}).get('mean', float('inf')))
                 
-                latent_memory = method_stats[latent_method].get('memory_vram_allocated', {}).get('mean', float('inf'))
-                text_memory = method_stats[text_method].get('memory_vram_allocated', {}).get('mean', float('inf'))
+                latent_memory = float(method_stats[latent_method].get('memory_vram_allocated', {}).get('mean', float('inf')))
+                text_memory = float(method_stats[text_method].get('memory_vram_allocated', {}).get('mean', float('inf')))
                 
-                latent_network = method_stats[latent_method].get('network_comm_data_size', {}).get('mean', float('inf'))
-                text_network = method_stats[text_method].get('network_comm_data_size', {}).get('mean', float('inf'))
+                latent_network = float(method_stats[latent_method].get('network_comm_data_size', {}).get('mean', float('inf')))
+                text_network = float(method_stats[text_method].get('network_comm_data_size', {}).get('mean', float('inf')))
                 
                 # 生成建议
                 if latent_compute < text_compute * 0.7:
+                    savings_pct = ((text_compute - latent_compute) / text_compute * 100)
                     report['recommendations'].append(
-                        f"LatentMAS reduces inference time by {((text_compute - latent_compute) / text_compute * 100):.1f}%, "
+                        f"LatentMAS reduces inference time by {savings_pct:.1f}%, "
                         f"making it ideal for latency-sensitive applications."
                     )
                 
                 if latent_memory < text_memory * 0.85:
+                    savings_pct = ((text_memory - latent_memory) / text_memory * 100)
                     report['recommendations'].append(
-                        f"LatentMAS reduces VRAM usage by {((text_memory - latent_memory) / text_memory * 100):.1f}%, "
+                        f"LatentMAS reduces VRAM usage by {savings_pct:.1f}%, "
                         f"enabling deployment on lower-memory GPUs."
                     )
                 
                 if latent_network < text_network * 0.3:
+                    savings_pct = ((text_network - latent_network) / text_network * 100)
                     report['recommendations'].append(
-                        f"LatentMAS reduces communication data size by {((text_network - latent_network) / text_network * 100):.1f}%, "
+                        f"LatentMAS reduces communication data size by {savings_pct:.1f}%, "
                         f"significantly lowering network bandwidth requirements."
                     )
         
-        # 保存报告
-        with open('infrastructure_analysis_report.json', 'w') as f:
-            json.dump(report, f, indent=2)
+        # 保存报告 - 使用转换函数
+        report_path = 'infrastructure_analysis_report.json'
+        with open(report_path, 'w') as f:
+            # 使用转换函数确保所有数据可序列化
+            json.dump(convert_numpy_types(report), f, indent=2, cls=NumpyJSONEncoder)
         
         print("\n" + "="*60)
         print("INFRASTRUCTURE ANALYSIS REPORT")
         print("="*60)
+        print(f"Report generated and saved to: {report_path}")
         print(f"Analysis completed with {len(self.data)} methods analyzed")
         print("\nKEY RECOMMENDATIONS:")
         for i, rec in enumerate(report['recommendations'], 1):
             print(f"{i}. {rec}")
         print("="*60)
         
-        return report
+        return convert_numpy_types(report)
     
     def plot_power_comparison(self, methods: List[str] = None):
         """绘制功耗对比图表"""
@@ -540,11 +613,12 @@ class InfrastructureAnalyzer:
     
 
     def generate_energy_efficiency_report(self):
-        """生成能效优化报告"""
+        """生成能效优化报告 - 修复NumPy序列化问题"""
         report = {
             'power_summary': {},
             'efficiency_recommendations': [],
-            'cost_analysis': {}
+            'cost_analysis': {},
+            'generated_at': datetime.now().isoformat()
         }
         
         # 分析不同方法的能效
@@ -554,33 +628,34 @@ class InfrastructureAnalyzer:
             if not experiments:
                 continue
             
-            total_energy = 0
+            total_energy = 0.0
             total_samples = 0
             total_tokens = 0
-            peak_power = 0
+            peak_power = 0.0
             count = 0
             
             for exp in experiments:
                 if 'power_data' in exp and 'power_summary' in exp['power_data']:
                     summary = exp['power_data']['power_summary']
-                    total_energy += summary.get('total_energy_consumed', 0)
-                    total_samples += len(exp['results']) if 'results' in exp else 0
+                    total_energy += float(summary.get('total_energy_consumed', 0.0))
+                    total_samples += len(exp.get('results', []))
                     # 估计处理的token数
                     if 'tokens_processed_total' in exp.get('experiment_config', {}):
-                        total_tokens += exp['experiment_config']['tokens_processed_total']
-                    peak_power = max(peak_power, summary.get('peak_power_draw', 0))
+                        total_tokens += int(exp['experiment_config']['tokens_processed_total'])
+                    peak_power = max(peak_power, float(summary.get('peak_power_draw', 0.0)))
                     count += 1
             
             if count > 0 and total_samples > 0:
                 energy_per_sample = total_energy / total_samples
-                tokens_per_joule = total_tokens / total_energy if total_energy > 0 else 0
+                tokens_per_joule = total_tokens / total_energy if total_energy > 0 else 0.0
                 
                 method_efficiency[method] = {
                     'energy_per_sample': energy_per_sample,
                     'tokens_per_joule': tokens_per_joule,
                     'peak_power': peak_power,
                     'total_energy': total_energy,
-                    'total_samples': total_samples
+                    'total_samples': total_samples,
+                    'total_tokens': total_tokens
                 }
         
         # 生成对比和建议
@@ -589,14 +664,15 @@ class InfrastructureAnalyzer:
             best_method_energy = min(method_efficiency.items(), key=lambda x: x[1]['energy_per_sample'])
             best_method_efficiency = max(method_efficiency.items(), key=lambda x: x[1]['tokens_per_joule'])
             
-            report['power_summary'] = method_efficiency
+            # 转换为可序列化格式
+            report['power_summary'] = convert_numpy_types(method_efficiency)
             
             # 生成建议
             if 'latent_mas' in method_efficiency and 'text_mas' in method_efficiency:
-                latent_energy = method_efficiency['latent_mas']['energy_per_sample']
-                text_energy = method_efficiency['text_mas']['energy_per_sample']
+                latent_energy = float(method_efficiency['latent_mas']['energy_per_sample'])
+                text_energy = float(method_efficiency['text_mas']['energy_per_sample'])
                 
-                energy_savings_pct = (text_energy - latent_energy) / text_energy * 100
+                energy_savings_pct = (text_energy - latent_energy) / text_energy * 100 if text_energy > 0 else 0
                 
                 report['efficiency_recommendations'].append(
                     f"LatentMAS reduces energy consumption per sample by {energy_savings_pct:.1f}% compared to Text-MAS"
@@ -621,7 +697,8 @@ class InfrastructureAnalyzer:
                     'text_daily_cost': text_daily_cost,
                     'latent_daily_cost': latent_daily_cost,
                     'daily_savings': daily_savings,
-                    'yearly_savings': yearly_savings
+                    'yearly_savings': yearly_savings,
+                    'energy_savings_pct': energy_savings_pct
                 }
                 
                 report['efficiency_recommendations'].append(
@@ -629,18 +706,20 @@ class InfrastructureAnalyzer:
                 )
                 
                 # 硬件要求分析
-                latent_peak_power = method_efficiency['latent_mas']['peak_power']
-                text_peak_power = method_efficiency['text_mas']['peak_power']
-                
-                power_reduction_pct = (text_peak_power - latent_peak_power) / text_peak_power * 100
-                
-                report['efficiency_recommendations'].append(
-                    f"LatentMAS reduces peak power requirements by {power_reduction_pct:.1f}%, enabling deployment on lower-power infrastructure"
-                )
+                if 'peak_power' in method_efficiency['latent_mas'] and 'peak_power' in method_efficiency['text_mas']:
+                    latent_peak_power = float(method_efficiency['latent_mas']['peak_power'])
+                    text_peak_power = float(method_efficiency['text_mas']['peak_power'])
+                    
+                    power_reduction_pct = (text_peak_power - latent_peak_power) / text_peak_power * 100 if text_peak_power > 0 else 0
+                    
+                    report['efficiency_recommendations'].append(
+                        f"LatentMAS reduces peak power requirements by {power_reduction_pct:.1f}%, enabling deployment on lower-power infrastructure"
+                    )
         
-        # 保存报告
-        with open('energy_efficiency_report.json', 'w') as f:
-            json.dump(report, f, indent=2)
+        # 保存报告 - 使用转换函数
+        report_path = 'energy_efficiency_report.json'
+        with open(report_path, 'w') as f:
+            json.dump(convert_numpy_types(report), f, indent=2)
         
         print("\n" + "="*60)
         print("ENERGY EFFICIENCY ANALYSIS REPORT")
@@ -656,8 +735,8 @@ class InfrastructureAnalyzer:
             print(f"\nCOST SAVINGS AT SCALE:")
             print(f"  Daily savings: ${cost['daily_savings']:.2f}")
             print(f"  Yearly savings: ${cost['yearly_savings']:.2f}")
-            print(f"  Power reduction: {((cost['text_daily_cost'] - cost['latent_daily_cost']) / cost['text_daily_cost'] * 100):.1f}%")
+            print(f"  Power reduction: {cost['energy_savings_pct']:.1f}%")
         
         print("="*60)
         
-        return report
+        return convert_numpy_types(report)
