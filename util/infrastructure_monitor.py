@@ -101,6 +101,7 @@ class InfrastructureMonitor:
         self.power_monitor_thread = None
         self.start_time = 0.0
         self.network_baseline = self._get_network_stats()
+        self.power_base = self._get_power_metrics()
         
         # 为每个agent和step存储指标
         self.agent_metrics = defaultdict(lambda: defaultdict(list))
@@ -137,7 +138,7 @@ class InfrastructureMonitor:
             for i in range(device_count):
                 try:
                     handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-                    gpu_name = pynvml.nvmlDeviceGetName(handle).decode()
+                    gpu_name = pynvml.nvmlDeviceGetName(handle)
                     gpu_total_mem = pynvml.nvmlDeviceGetMemoryInfo(handle).total / (1024**3)  # GB
                     
                     self.gpu_handles.append(handle)
