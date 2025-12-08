@@ -55,12 +55,13 @@ class StorageMetrics:
 @dataclass
 class PowerMetrics:
     total_energy_consumed: float = 0.0  # Joules
-    avg_power_draw: float = 0.0         # Watts
+    avg_power_draw: float = 0.0         # Watts/s
     peak_power_draw: float = 0.0        # Watts
     gpu_energy_fraction: float = 0.0    # 0-1
     cpu_energy_fraction: float = 0.0    # 0-1
-    avg_tokens_per_joule: float = 0.0   # tokens/J
-    avg_samples_per_joule: float = 0.0  # samples/J
+    dram_energy_fraction: float = 0.0 # 0-1
+    avg_tokens_per_watt: float = 0.0   # tokens/J
+    avg_samples_per_watt: float = 0.0  # samples/J
     measurement_duration: float = 0.0   # seconds
 
 @dataclass
@@ -153,7 +154,7 @@ class InfrastructureMonitor:
         except Exception as e:
             print(f"Warning: GPU monitoring initialization failed: {e}")
     
-    def _get_gpu_metrics(self) -> Dict[str, float]:
+    def _get_gpu_metrics(self, gpu_selected_ids: list = [0]) -> Dict[str, float]:
         """获取GPU指标 - 支持多GPU聚合"""
         if not self.gpu_handles:
             return {
@@ -167,8 +168,9 @@ class InfrastructureMonitor:
             total_mem_used = 0
             total_mem_total = 0
             
-            for i, handle in enumerate(self.gpu_handles):
+            for i in gpu_selected_ids:
                 try:
+                    handle = self.gpu_handles[i]
                     util = pynvml.nvmlDeviceGetUtilizationRates(handle)
                     mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
                     
@@ -242,41 +244,69 @@ class InfrastructureMonitor:
             'peak': peak
         }
     
+    def _get_cpu_power(self, label):
+        """获取CPU功耗基准值"""
+        try:
+            # 尝试使用pyRAPL如果可用
+            import pyRAPL
+            pyRAPL.setup()
+            measure = pyRAPL.Measurement(label)
+            measure.begin()
+            print(f"power monitor: ", label)
+            measure.end()
+            cpu_package_power = np.array(measure.result.pkg) / measure.result.duration # the pkg measure the power of each CPU package in micro Jules within the called duration in microseconds;
+            dram_package_power = np.array(measure.result.dram) / measure.result.duration
+            return cpu_package_power, dram_package_power
+        except ImportError:
+            # 估算CPU功耗
+            print("fail to monitor the CPU power consumption in watts")
+    
+    def _get_gpu_power_metrics(self, gpu_ids: list = [0]) -> Dict[int, Dict]:
+        """获取所有GPU的功耗指标"""
+        power_metrics = {}
+        for i in gpu_ids:
+            try:
+                handle = self.gpu_handles[i]
+                # 获取当前功耗
+                power_draw = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0  # mW to W
+                # 计算能耗（需要时间积分）
+                current_time = time.time()
+                if i not in self.last_power_readings:
+                    self.last_power_readings[i] = {'power': power_draw, 'time': current_time}
+                
+                power_metrics[i] = {
+                    'gpu_power_draw': power_draw,
+                    'timestamp': current_time
+                }
+                
+            except Exception as e:
+                print(f"Warning: Failed to get power metrics for GPU {i}: {e}")
+        
+        return power_metrics
+    
     def _get_power_metrics(self) -> Dict[str, float]:
-        """获取功耗指标（模拟或真实）"""
-        current_time = time.time()
-        elapsed_time = current_time - self.power_start_time if self.power_start_time > 0 else 0.01
+        cpu_package_power, dram_package_power = self._get_cpu_power("running")
+        cpu_power = cpu_package_power.sum()
+        dram_power = dram_package_power.sum()
+        gpu_power = 0.0
+        gpu_nums = 0.0
+        gpu_power_metrics = self._get_gpu_power_metrics()
+        for _, power in gpu_power_metrics.items():
+            gpu_nums += 1
+            gpu_power += power
+        if gpu_nums > 0:
+            gpu_power /= gpu_nums
+        if self.power_base is not None:
+            cpu_power = max(cpu_power - self.power_base.cpu_power, 0)
+            dram_power = max(dram_power - self.power_base.dram_power)
+            gpu_power = max(gpu_power - self.power_base.gpu_power, 0)
         
-        # 模拟功耗数据（实际应用中应替换为真实功耗监控）
-        gpu_metrics = self._get_gpu_metrics()
-        cpu_metrics = self._get_cpu_metrics()
-        
-        # 基于GPU和CPU利用率估算功耗
-        base_power = 50.0  # 基础功耗 (W)
-        gpu_power_per_util = 2.0  # 每1% GPU利用率的功耗 (W/%)
-        cpu_power_per_util = 0.5   # 每1% CPU利用率的功耗 (W/%)
-        
-        estimated_gpu_power = gpu_metrics['gpu_util'] * gpu_power_per_util
-        estimated_cpu_power = cpu_metrics['cpu_util'] * cpu_power_per_util
-        
-        total_power = base_power + estimated_gpu_power + estimated_cpu_power
-        
-        # 计算能耗
-        energy_consumed = total_power * elapsed_time / 3600  # 转换为kWh，简化处理
-        self.total_energy_consumed += energy_consumed
-        
-        # GPU和CPU功耗占比
-        gpu_power_fraction = estimated_gpu_power / total_power if total_power > 0 else 0.0
-        cpu_power_fraction = estimated_cpu_power / total_power if total_power > 0 else 0.0
         
         return {
-            'system_power_draw': total_power,
-            'gpu_power_draw': estimated_gpu_power,
-            'cpu_power_draw': estimated_cpu_power,
-            'gpu_power_fraction': gpu_power_fraction,
-            'cpu_power_fraction': cpu_power_fraction,
-            'total_energy_consumed': self.total_energy_consumed,
-            'timestamp': current_time - self.start_time
+            'cpu_power': cpu_power,
+            'dram_power': dram_power,
+            'gpu_power': gpu_power,
+            'timestamp': time.time()
         }
     
     def start_monitoring(self):
@@ -285,6 +315,7 @@ class InfrastructureMonitor:
         self.start_time = time.time()
         self.power_start_time = self.start_time
         self.network_baseline = self._get_network_stats()
+        self.power_base = self._get_power_metrics()
         
         # 基础监控线程
         def monitoring_loop():
@@ -305,7 +336,7 @@ class InfrastructureMonitor:
                 }
                 
                 self.metrics_queue.put(metrics)
-                time.sleep(0.1)  # 100ms采样间隔
+                time.sleep(1.0)  # 1s采样间隔
         
         # 功耗监控线程（如果启用）
         def power_monitoring_loop():
@@ -454,21 +485,25 @@ class InfrastructureMonitor:
             
             if power_metrics:
                 latest_power = power_metrics[-1]
-                total_energy = latest_power['total_energy_consumed']
-                avg_power = total_energy / (latest_power['timestamp'] + 0.001) if latest_power['timestamp'] > 0 else 0
+                total_cpu_power = sum(power['cpu_power'] for power in power_metrics)
+                total_gpu_power = sum(power['gpu_power'] for power in power_metrics)
+                total_dram_power = sum(power['dram_power'] for power in power_metrics)
+                total_energy = sum(power['cpu_power'] + power['dram_power'] + power['gpu_power'] for power in power_metrics)
+                avg_power = total_energy / len(power_metrics)
                 
-                tokens_per_joule = tokens_processed / total_energy if total_energy > 0 else 0
-                samples_per_joule = samples_processed / total_energy if total_energy > 0 else 0
+                tokens_per_watt = tokens_processed / total_energy if total_energy > 0 else 0
+                samples_per_watt = samples_processed / total_energy if total_energy > 0 else 0
                 
                 metrics.power = PowerMetrics(
                     total_energy_consumed=total_energy,
                     avg_power_draw=avg_power,
-                    peak_power_draw=max(pm['system_power_draw'] for pm in power_metrics) if power_metrics else 0,
-                    gpu_energy_fraction=latest_power['gpu_power_fraction'],
-                    cpu_energy_fraction=latest_power['cpu_power_fraction'],
-                    avg_tokens_per_joule=tokens_per_joule,
-                    avg_samples_per_joule=samples_per_joule,
-                    measurement_duration=latest_power['timestamp']
+                    peak_power_draw=max(power['cpu_power'] + power['dram_power'] + power['gpu_power'] for power in power_metrics) if power_metrics else 0,
+                    gpu_energy_fraction=total_gpu_power / total_energy,
+                    cpu_energy_fraction=total_cpu_power / total_energy,
+                    dram_energy_fraction=total_dram_power / total_energy,
+                    avg_tokens_per_watt=tokens_per_watt,
+                    avg_samples_per_watt=samples_per_watt,
+                    measurement_duration=len(power_metrics)
                 )
         
         # 存储指标
@@ -568,9 +603,10 @@ class InfrastructureMonitor:
         
         gpu_energy_fraction = sum(m['gpu_energy_fraction'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
         cpu_energy_fraction = sum(m['cpu_energy_fraction'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
+        dram_energy_fraction = sum(m['dram_energy_fraction'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
         
-        tokens_per_joule = sum(m['avg_tokens_per_joule'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
-        samples_per_joule = sum(m['avg_samples_per_joule'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
+        tokens_per_watt = sum(m['avg_tokens_per_watt'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
+        samples_per_watt = sum(m['avg_samples_per_watt'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
         
         return {
             'total_energy_consumed': total_energy,
@@ -578,8 +614,9 @@ class InfrastructureMonitor:
             'peak_power_draw': peak_power,
             'gpu_energy_fraction': gpu_energy_fraction,
             'cpu_energy_fraction': cpu_energy_fraction,
-            'avg_tokens_per_joule': tokens_per_joule,
-            'avg_samples_per_joule': samples_per_joule
+            'dram_energy_fraction': dram_energy_fraction,
+            'avg_tokens_per_watt': tokens_per_watt,
+            'avg_samples_per_watt': samples_per_watt
         }
     
     def get_summary_statistics(self) -> Dict[str, Dict]:

@@ -126,6 +126,7 @@ class ModelWrapper:
         prompts: List[str] = []
         for messages in batch_messages:
             prompts.append(self.render_chat(messages, add_generation_prompt=add_generation_prompt))
+        
         encoded = self.tokenizer(
             prompts,
             return_tensors="pt",
@@ -316,16 +317,15 @@ class ModelWrapper:
         )
         past = outputs.past_key_values
 
-        e_t = outputs.hidden_states[0][:, -1, :]          # [B, D]
-        last_hidden = outputs.hidden_states[-1][:, -1, :] # [B, D]
-        h_t = last_hidden.detach().clone()
+        e_t = outputs.hidden_states[0][:, -1, :]          # [B, D] # the first layer and the last token
+        last_hidden = outputs.hidden_states[-1][:, -1, :] # [B, D] # the last layer and the last token
+        h_t = last_hidden.detach().clone() # detach() creates a new tensor that shares the same data with the original tensor, and clone() returns an independent copy of the data
 
         e_t_plus_1 = None
         latent_vecs_all: List[torch.Tensor] = []
         latent_vecs_all.append(e_t.detach().clone())
 
         for step in range(latent_steps):
-
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
             latent_vec = self._apply_latent_realignment(last_hidden, source_model)
 
@@ -408,7 +408,6 @@ class ModelWrapper:
         
         
         for _ in range(latent_steps):
-
             source_model = self.HF_model if hasattr(self, "HF_model") else self.model
             latent_vec = self._apply_latent_realignment(last_hidden, source_model)
             latent_embed = latent_vec.unsqueeze(1)
