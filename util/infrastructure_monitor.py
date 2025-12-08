@@ -101,7 +101,6 @@ class InfrastructureMonitor:
         self.power_monitor_thread = None
         self.start_time = 0.0
         self.network_baseline = self._get_network_stats()
-        self.power_base = self._get_power_metrics()
         
         # 为每个agent和step存储指标
         self.agent_metrics = defaultdict(lambda: defaultdict(list))
@@ -128,6 +127,7 @@ class InfrastructureMonitor:
         self.total_energy_consumed = 0.0
         self.last_power_readings = {}
         self.power_start_time = 0.0
+        self.power_base = self._get_power_metrics()
     
     def _init_gpu_monitoring(self):
         """初始化GPU监控 - 支持多GPU"""
