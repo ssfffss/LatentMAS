@@ -55,13 +55,13 @@ class StorageMetrics:
 @dataclass
 class PowerMetrics:
     total_energy_consumed: float = 0.0  # Joules
-    avg_power_draw: float = 0.0         # Watts/s
-    peak_power_draw: float = 0.0        # Watts
+    avg_power_draw: float = 0.0         # joules/s = W
+    peak_power_draw: float = 0.0        # joules/s = W
     gpu_energy_fraction: float = 0.0    # 0-1
     cpu_energy_fraction: float = 0.0    # 0-1
     dram_energy_fraction: float = 0.0 # 0-1
-    avg_tokens_per_watt: float = 0.0   # tokens/J
-    avg_samples_per_watt: float = 0.0  # samples/J
+    avg_tokens_per_joule: float = 0.0   # tokens/J
+    avg_samples_per_joule: float = 0.0  # samples/J
     measurement_duration: float = 0.0   # seconds
 
 @dataclass
@@ -93,6 +93,9 @@ class AgentCommunicationMetrics:
 class InfrastructureMonitor:
     def __init__(self, args, method_name: str = "unknown"):
         self.args = args
+        self.cpu_count = os.cpu_count()
+        self.cpu_base = None
+        self.cpu_base = self._get_cpu_metrics()
         self.method_name = method_name
         self.metrics_queue = queue.Queue()
         self.power_metrics_queue = queue.Queue()  # 专门用于功耗监控
@@ -181,7 +184,7 @@ class InfrastructureMonitor:
                 except Exception as e:
                     print(f"Warning: Failed to get metrics for GPU {i}: {e}")
             
-            avg_util = total_util / len(self.gpu_handles) if self.gpu_handles else 0.0
+            avg_util = total_util / len(gpu_selected_ids) if gpu_selected_ids else 0.0
             
             return {
                 'gpu_util': avg_util,
@@ -214,9 +217,15 @@ class InfrastructureMonitor:
     
     def _get_cpu_metrics(self) -> Dict[str, float]:
         """获取CPU和内存指标"""
+        if self.cpu_base is None:
+            return {
+                'cpu_util': psutil.cpu_percent(interval = 0.1) * self.cpu_count,
+                'cpu_mem_used': psutil.virtual_memory().used / (1024**3),  # GB
+                'cpu_mem_total': psutil.virtual_memory().total / (1024**3)  # GB
+            }
         return {
-            'cpu_util': psutil.cpu_percent(),
-            'cpu_mem_used': psutil.virtual_memory().used / (1024**3),  # GB
+            'cpu_util': psutil.cpu_percent(interval = 0.1) * self.cpu_count - self.cpu_base['cpu_util'],
+            'cpu_mem_used': psutil.virtual_memory().used / (1024**3) - self.cpu_base['cpu_mem_used'],  # GB
             'cpu_mem_total': psutil.virtual_memory().total / (1024**3)  # GB
         }
     
@@ -495,18 +504,18 @@ class InfrastructureMonitor:
                 total_energy = sum(power['cpu_power'] + power['dram_power'] + power['gpu_power'] for power in power_metrics)
                 avg_power = total_energy / len(power_metrics)
                 
-                tokens_per_watt = tokens_processed / total_energy if total_energy > 0 else 0
-                samples_per_watt = samples_processed / total_energy if total_energy > 0 else 0
+                tokens_per_joule = tokens_processed / total_energy if total_energy > 0 else 0
+                samples_per_joule = samples_processed / total_energy if total_energy > 0 else 0
                 
                 metrics.power = PowerMetrics(
                     total_energy_consumed=total_energy,
-                    avg_power_draw=avg_power,
-                    peak_power_draw=max(power['cpu_power'] + power['dram_power'] + power['gpu_power'] for power in power_metrics) if power_metrics else 0,
+                    avg_power=avg_power,
+                    peak_power=max(power['cpu_power'] + power['dram_power'] + power['gpu_power'] for power in power_metrics) if power_metrics else 0,
                     gpu_energy_fraction=total_gpu_power / total_energy,
                     cpu_energy_fraction=total_cpu_power / total_energy,
                     dram_energy_fraction=total_dram_power / total_energy,
-                    avg_tokens_per_watt=tokens_per_watt,
-                    avg_samples_per_watt=samples_per_watt,
+                    avg_tokens_per_joule=tokens_per_joule,
+                    avg_samples_per_joule=samples_per_joule,
                     measurement_duration=len(power_metrics)
                 )
         
@@ -609,8 +618,8 @@ class InfrastructureMonitor:
         cpu_energy_fraction = sum(m['cpu_energy_fraction'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
         dram_energy_fraction = sum(m['dram_energy_fraction'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
         
-        tokens_per_watt = sum(m['avg_tokens_per_watt'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
-        samples_per_watt = sum(m['avg_samples_per_watt'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
+        tokens_per_joule = sum(m['avg_tokens_per_joule'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
+        samples_per_joule = sum(m['avg_samples_per_joule'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
         
         return {
             'total_energy_consumed': total_energy,
@@ -619,8 +628,8 @@ class InfrastructureMonitor:
             'gpu_energy_fraction': gpu_energy_fraction,
             'cpu_energy_fraction': cpu_energy_fraction,
             'dram_energy_fraction': dram_energy_fraction,
-            'avg_tokens_per_watt': tokens_per_watt,
-            'avg_samples_per_watt': samples_per_watt
+            'avg_tokens_per_joule': tokens_per_joule,
+            'avg_samples_per_joule': samples_per_joule
         }
     
     def get_summary_statistics(self) -> Dict[str, Dict]:
