@@ -253,7 +253,7 @@ class InfrastructureMonitor:
             pyRAPL.setup()
             measure = pyRAPL.Measurement(label)
             measure.begin()
-            print(f"power monitor: {label}")
+            time.sleep(0.5)
             measure.end()
             print(f"CPU power monitor: {measure.result}")
             cpu_package_power = np.array(measure.result.pkg) / measure.result.duration # the pkg measure the power of each CPU package in micro Jules within the called duration in microseconds;
@@ -300,9 +300,10 @@ class InfrastructureMonitor:
         if gpu_nums > 0:
             gpu_power /= gpu_nums
         if self.power_base is not None:
-            cpu_power = max(cpu_power - self.power_base.cpu_power, 0)
-            dram_power = max(dram_power - self.power_base.dram_power)
-            gpu_power = max(gpu_power - self.power_base.gpu_power, 0)
+            cpu_power = max(cpu_power - self.power_base['cpu_power'], 0)
+            dram_power = max(dram_power - self.power_base['dram_power'], 0)
+            gpu_power = max(gpu_power - self.power_base['gpu_power'], 0)
+            print(f"cpu_power: {cpu_power}, dram_power: {dram_power}, gpu_power: {gpu_power} - power_base: {self.power_base}")
         
         
         return {
