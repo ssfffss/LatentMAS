@@ -108,17 +108,24 @@ class InfrastructureAnalyzer:
             print("No metrics data found. Please run experiments first.")
             return
         
-        fig, axes = plt.subplots(2, 2, figsize=(20, 15))
-        fig.suptitle('Multi-Agent Communication Methods: Infrastructure Impact Comparison', fontsize=16)
-        
+
+        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
+        #fig.suptitle('Multi-Agent Communication Methods: Infrastructure Impact Comparison', fontsize=16)
         self._plot_compute_comparison(methods, axes[0, 0])
-        self._plot_memory_comparison(methods, axes[0, 1])
-        self._plot_network_comparison(methods, axes[1, 0])
-        self._plot_storage_comparison(methods, axes[1, 1])
-        
         plt.tight_layout()
-        plt.savefig('infrastructure_comparison.png', bbox_inches='tight', dpi=300)
+        plt.savefig('infrastructure_comparison_compute.png', bbox_inches='tight', dpi=300)
+        plt.close()
+
+        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
+        #fig.suptitle('Multi-Agent Communication Methods: Infrastructure Impact Comparison', fontsize=16)
+        self._plot_memory_comparison(methods, axes[0, 0])
+        plt.tight_layout()
+        plt.savefig('infrastructure_comparison_memory.png', bbox_inches='tight', dpi=300)
         plt.show()
+
+        # self._plot_memory_comparison(methods, axes[0, 1])
+        # self._plot_network_comparison(methods, axes[1, 0])
+        # self._plot_storage_comparison(methods, axes[1, 1])
     
     def _plot_compute_comparison(self, methods, ax):
         """绘制计算负载对比"""
@@ -421,17 +428,31 @@ class InfrastructureAnalyzer:
             print("No metrics data found. Please run experiments first.")
             return
         
-        fig, axes = plt.subplots(2, 2, figsize=(20, 15))
-        fig.suptitle('Power Consumption Analysis: Multi-Agent Communication Methods', fontsize=16)
-        
+        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
         self._plot_energy_consumption(methods, axes[0, 0])
-        self._plot_power_draw_over_time(methods, axes[0, 1])
-        self._plot_energy_efficiency(methods, axes[1, 0])
-        self._plot_gpu_cpu_power_breakdown(methods, axes[1, 1])
-        
         plt.tight_layout()
-        plt.savefig('power_consumption_analysis.png', bbox_inches='tight', dpi=300)
-        plt.show()
+        plt.savefig('energy_consumption_analysis.png', bbox_inches='tight', dpi=300)
+        plt.close()
+
+        #fig.suptitle('Power Consumption Analysis: Multi-Agent Communication Methods', fontsize=16)
+        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
+        self._plot_power_draw_over_time(methods, axes[0, 0])
+        plt.tight_layout()
+        plt.savefig('power_draw_analysis.png', bbox_inches='tight', dpi=300)
+        plt.close()
+
+        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
+        self._plot_energy_efficiency(methods, axes[0, 0])
+        plt.tight_layout()
+        plt.savefig('energy_efficiency_analysis.png', bbox_inches='tight', dpi=300)
+        plt.close()
+
+        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
+        self._plot_gpu_cpu_power_breakdown(methods, axes[0, 0])
+        plt.tight_layout()
+        plt.savefig('power_breakdown_analysis.png', bbox_inches='tight', dpi=300)
+        plt.close()
+        
     
     def _plot_energy_consumption(self, methods, ax):
         """绘制总能耗对比"""
