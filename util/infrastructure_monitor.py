@@ -127,7 +127,7 @@ class InfrastructureMonitor:
         self.total_energy_consumed = 0.0
         self.last_power_readings = {}
         self.power_start_time = 0.0
-        self.power_base = self._get_power_metrics()
+        self.power_base = None
     
     def _init_gpu_monitoring(self):
         """初始化GPU监控 - 支持多GPU"""
@@ -294,7 +294,7 @@ class InfrastructureMonitor:
         gpu_power_metrics = self._get_gpu_power_metrics()
         for _, power in gpu_power_metrics.items():
             gpu_nums += 1
-            gpu_power += power
+            gpu_power += power['gpu_power_draw']
         if gpu_nums > 0:
             gpu_power /= gpu_nums
         if self.power_base is not None:
