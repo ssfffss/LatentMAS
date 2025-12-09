@@ -77,7 +77,7 @@ class AgentCommunicationMetrics:
     network: NetworkMetrics = None
     storage: StorageMetrics = None
     power: PowerMetrics = None
-    timestamp: float = 0.0
+    duration: float = 0.0
     
     def __post_init__(self):
         if self.compute is None:
@@ -339,7 +339,7 @@ class InfrastructureMonitor:
                 torch_mem = self._get_torch_memory_stats()
                 
                 metrics = {
-                    'timestamp': time.time() - self.start_time,
+                    'duration': time.time() - self.start_time,
                     'gpu_util': gpu_metrics['gpu_util'],
                     'gpu_mem_used': gpu_metrics['gpu_mem_used'],
                     'cpu_util': cpu_metrics['cpu_util'],
@@ -357,7 +357,7 @@ class InfrastructureMonitor:
             while self.is_monitoring and self.power_monitoring_enabled:
                 power_metrics = self._get_power_metrics()
                 self.power_metrics_queue.put(power_metrics)
-                time.sleep(1.0)  # 1秒采样间隔，功耗变化较慢
+                time.sleep(0.5)  # 1秒采样间隔，功耗变化较慢
         
         self.monitor_thread = threading.Thread(target=monitoring_loop, daemon=True)
         self.monitor_thread.start()
@@ -397,7 +397,7 @@ class InfrastructureMonitor:
         total_time: float = 0.0
     ):
         """记录Agent通信的基础设施指标 - 独立实现，不依赖父类"""
-        timestamp = time.time() - self.start_time
+        duration = time.time() - self.start_time
         
         # 计算指标
         gpu_metrics = self._get_gpu_metrics()
@@ -448,7 +448,7 @@ class InfrastructureMonitor:
             role=role,
             step_idx=step_idx,
             batch_size=batch_size,
-            timestamp=timestamp
+            duration=duration
         )
         
         # 填充各维度指标
@@ -500,10 +500,9 @@ class InfrastructureMonitor:
                 power_metrics.append(self.power_metrics_queue.get())
             
             if power_metrics:
-                latest_power = power_metrics[-1]
-                total_cpu_power = sum(power['cpu_power'] for power in power_metrics)
-                total_gpu_power = sum(power['gpu_power'] for power in power_metrics)
-                total_dram_power = sum(power['dram_power'] for power in power_metrics)
+                total_cpu_energy = sum(power['cpu_power'] for power in power_metrics)
+                total_gpu_energy = sum(power['gpu_power'] for power in power_metrics)
+                total_dram_energy = sum(power['dram_power'] for power in power_metrics)
                 total_energy = sum(power['cpu_power'] + power['dram_power'] + power['gpu_power'] for power in power_metrics)
                 avg_power = total_energy / len(power_metrics)
                 
@@ -514,9 +513,9 @@ class InfrastructureMonitor:
                     total_energy_consumed=total_energy,
                     avg_power_draw=avg_power,
                     peak_power_draw=max(power['cpu_power'] + power['dram_power'] + power['gpu_power'] for power in power_metrics) if power_metrics else 0,
-                    gpu_energy_fraction=total_gpu_power / total_energy,
-                    cpu_energy_fraction=total_cpu_power / total_energy,
-                    dram_energy_fraction=total_dram_power / total_energy,
+                    gpu_energy_fraction=total_gpu_energy / total_energy,
+                    cpu_energy_fraction=total_cpu_energy / total_energy,
+                    dram_energy_fraction=total_dram_energy / total_energy,
                     avg_tokens_per_joule=tokens_per_joule,
                     avg_samples_per_joule=samples_per_joule,
                     measurement_duration=len(power_metrics)
@@ -589,12 +588,12 @@ class InfrastructureMonitor:
             power_data = {
                 'experiment_name': experiment_name,
                 'method': self.method_name,
-                'power_metrics': [],
+                'power_metrics': self.overall_metrics['power'],
                 'power_summary': self.get_power_summary()
             }
             
             while not self.power_metrics_queue.empty():
-                power_data['power_metrics'].append(self.power_metrics_queue.get())
+                print(self.power_metrics_queue.get())
             
             power_filename = f"{experiment_name}_{self.method_name}_{int(time.time())}_power.json"
             power_filepath = os.path.join(output_dir, power_filename)
@@ -613,16 +612,17 @@ class InfrastructureMonitor:
         
         power_metrics = self.overall_metrics['power']
         
-        total_energy = sum(m['total_energy_consumed'] for m in power_metrics)
-        avg_power = sum(m['avg_power_draw'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
-        peak_power = max(m['peak_power_draw'] for m in power_metrics) if power_metrics else 0
+        total_energy = sum(pm['total_energy_consumed'] for pm in power_metrics)
+        total_duration = sum(pm['measurement_duration'] for pm in power_metrics)
+        avg_power = total_energy / total_duration if power_metrics else total_duration > 0
+        peak_power = max(pm['peak_power_draw'] for pm in power_metrics) if power_metrics else 0
         
-        gpu_energy_fraction = sum(m['gpu_energy_fraction'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
-        cpu_energy_fraction = sum(m['cpu_energy_fraction'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
-        dram_energy_fraction = sum(m['dram_energy_fraction'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
+        gpu_energy_fraction = sum(pm['total_energy_consumed'] * pm['gpu_energy_fraction'] for pm in power_metrics) / total_energy if power_metrics else 0
+        cpu_energy_fraction = sum(pm['total_energy_consumed'] * pm['cpu_energy_fraction'] for pm in power_metrics) / total_energy if power_metrics else 0
+        dram_energy_fraction = sum(pm['total_energy_consumed'] * pm['dram_energy_fraction'] for pm in power_metrics) / total_energy if power_metrics else 0
         
-        tokens_per_joule = sum(m['avg_tokens_per_joule'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
-        samples_per_joule = sum(m['avg_samples_per_joule'] for m in power_metrics) / len(power_metrics) if power_metrics else 0
+        tokens_per_joule = sum(pm['avg_tokens_per_joule'] * pm['total_energy_consumed'] for pm in power_metrics) / total_energy if power_metrics else 0
+        samples_per_joule = sum(pm['avg_samples_per_joule'] * pm['total_energy_consumed'] for pm in power_metrics) / total_energy if power_metrics else 0
         
         return {
             'total_energy_consumed': total_energy,
