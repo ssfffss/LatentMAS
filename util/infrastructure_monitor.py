@@ -253,8 +253,9 @@ class InfrastructureMonitor:
             pyRAPL.setup()
             measure = pyRAPL.Measurement(label)
             measure.begin()
-            print(f"power monitor: ", label)
+            print(f"power monitor: {label}")
             measure.end()
+            print(f"CPU power monitor: {measure.result}")
             cpu_package_power = np.array(measure.result.pkg) / measure.result.duration # the pkg measure the power of each CPU package in micro Jules within the called duration in microseconds;
             dram_package_power = np.array(measure.result.dram) / measure.result.duration
             return cpu_package_power, dram_package_power
@@ -283,6 +284,7 @@ class InfrastructureMonitor:
             except Exception as e:
                 print(f"Warning: Failed to get power metrics for GPU {i}: {e}")
         
+        print(f"gpu power monitor: {power_metrics}")
         return power_metrics
     
     def _get_power_metrics(self) -> Dict[str, float]:
