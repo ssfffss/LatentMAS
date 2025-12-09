@@ -195,20 +195,9 @@ class LatentMASMethod:
                             for layer in past_kv
                         ) / (1024**3)  # GB
                     
-                    # 记录Agent通信指标（包含功耗）
-                    self.monitor.record_agent_communication(
-                        agent_name=agent.name,
-                        role=agent.role,
-                        step_idx=list_idx,
-                        batch_size=batch_size,
-                        input_data=batch_messages,
-                        output_data="latent_thoughts",  # latent输出
-                        latent_vectors=step_latent_vectors,
-                        kv_cache_size=step_kv_cache_size,
-                        inference_time=step_inference_time,
-                        tokens_processed=step_tokens_processed,
-                        samples_processed=batch_size
-                    )
+                    input_data=batch_messages
+                    output_data="latent_thoughts" # latent输出
+                    latent_vectors=step_latent_vectors
                 else:
                     past_for_decoding = past_kv if self.latent_steps > 0 else None
 
@@ -264,8 +253,6 @@ class LatentMASMethod:
                                 "output": final_text,
                             }
                         )
-                    step_output_data = final_texts
-                    step_input_data = judger_prompts
 
                     # 获取KV缓存大小
                     if past_kv is not None:
@@ -273,24 +260,13 @@ class LatentMASMethod:
                             sum(p.numel() * p.element_size() for p in layer) 
                             for layer in past_kv
                         ) / (1024**3)  # GB
-
-                    # 记录Judger通信指标（包含功耗）
-                    self.monitor.record_agent_communication(
-                        agent_name=agent.name,
-                        role=agent.role,
-                        step_idx=list_idx,
-                        batch_size=batch_size,
-                        input_data=judger_prompts,
-                        output_data=generated_batch,
-                        latent_vectors=None,  # Text输出
-                        kv_cache_size=step_kv_cache_size,
-                        inference_time=step_inference_time,
-                        tokens_processed=step_tokens_processed,
-                        samples_processed=batch_size
-                    )
+                    
+                    input_data=judger_prompts
+                    output_data=generated_batch
+                    latent_vectors=None  # Text输出
                 
-                # # compute the agent inference time
-                # step_time = time.time() - step_start_time
+                # compute the agent total time
+                step_time = time.time() - step_start_time
                 
                 # # estimate the number of tokens processed
                 # tokens_processed = 0
@@ -310,6 +286,36 @@ class LatentMASMethod:
                 #     inference_time=step_time,
                 #     tokens_processed=tokens_processed
                 # )
+                # 记录Agent通信指标（包含功耗）
+                # self.monitor.record_agent_communication(
+                #     agent_name=agent.name,
+                #     role=agent.role,
+                #     step_idx=list_idx,
+                #     batch_size=batch_size,
+                #     input_data=batch_messages,
+                #     output_data="latent_thoughts",  # latent输出
+                #     latent_vectors=step_latent_vectors,
+                #     kv_cache_size=step_kv_cache_size,
+                #     inference_time=step_inference_time,
+                #     tokens_processed=step_tokens_processed,
+                #     samples_processed=batch_size
+                # )
+
+                # 记录Judger通信指标（包含功耗）
+                self.monitor.record_agent_communication(
+                    agent_name=agent.name,
+                    role=agent.role,
+                    step_idx=list_idx,
+                    batch_size=batch_size,
+                    input_data=input_data,
+                    output_data=output_data,
+                    latent_vectors=latent_vectors,  # Text输出
+                    kv_cache_size=step_kv_cache_size,
+                    inference_time=step_inference_time,
+                    tokens_processed=step_tokens_processed,
+                    samples_processed=batch_size,
+                    total_step_time=step_time
+                )
 
             results: List[Dict] = []
             for idx, item in enumerate(items):

@@ -162,7 +162,7 @@ class InfrastructureAnalyzer:
         ax.bar(x - width*1.5, df['gpu_util'], width, label='GPU Util (%)', alpha=0.8)
         ax.bar(x - width/2, df['inference_time'] * 10, width, label='Inference Time x10 (s)', alpha=0.8)  # 缩放以便可视化
         ax.bar(x + width/2, df['flops_estimate'] / 100, width, label='GFLOPS / 100', alpha=0.8)  # 缩放
-        ax.bar(x + width*1.5, df['tokens_per_second'] / 1000, width, label='Tokens/sec / 1000', alpha=0.8)  # 缩放
+        ax.bar(x + width*1.5, df['tokens_per_second'], width, label='Tokens/sec', alpha=0.8)  # 缩放
         
         ax.set_xlabel('Communication Method')
         ax.set_ylabel('Normalized Metrics')

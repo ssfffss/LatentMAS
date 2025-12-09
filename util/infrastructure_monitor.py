@@ -22,6 +22,7 @@ class ComputeMetrics:
     cpu_mem_used: float = 0.0
     flops_estimate: float = 0.0  # GFLOPS
     inference_time: float = 0.0  # seconds
+    total_time: float = 0.0 # seconds
     tokens_per_second: float = 0.0
 
 @dataclass
@@ -392,7 +393,8 @@ class InfrastructureMonitor:
         kv_cache_size: float = 0.0,
         inference_time: float = 0.0,
         tokens_processed: int = 0,
-        samples_processed: int = 1
+        samples_processed: int = 1,
+        total_time: float = 0.0
     ):
         """记录Agent通信的基础设施指标 - 独立实现，不依赖父类"""
         timestamp = time.time() - self.start_time
@@ -458,6 +460,7 @@ class InfrastructureMonitor:
             cpu_mem_used=cpu_metrics['cpu_mem_used'],
             flops_estimate=flops_estimate,
             inference_time=inference_time,
+            total_time=total_time,
             tokens_per_second=tokens_processed / inference_time if inference_time > 0 else 0
         )
         

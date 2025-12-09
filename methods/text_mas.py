@@ -137,7 +137,6 @@ class TextMASMethod:
                 }
 
                 for idx in range(batch_size):
-
                     text_out = generated_texts[idx].strip()
 
                     if self.args.prompt == "hierarchical":
@@ -164,8 +163,9 @@ class TextMASMethod:
                         }
                     )
 
-                    # 记录输出数据（对于分析很重要）
-                    step_output_data = generated_texts
+                # 记录输出数据（对于分析很重要）
+                step_time = time.time() - step_start_time
+                step_output_data = generated_texts
                 # import pdb; pdb.set_trace()
 
                 self.monitor.record_agent_communication(
@@ -179,7 +179,8 @@ class TextMASMethod:
                     kv_cache_size=step_kv_cache_size,     # KV缓存大小
                     inference_time=step_inference_time,   # 推理时间
                     tokens_processed=step_tokens_processed,  # 处理的token数
-                    samples_processed=batch_size          # 处理的样本数
+                    samples_processed=batch_size,        # 处理的样本数
+                    total_step_time=step_time
                 )
 
             results: List[Dict] = []
