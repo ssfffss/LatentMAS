@@ -498,13 +498,21 @@ class InfrastructureMonitor:
             power_metrics = []
             while not self.power_metrics_queue.empty():
                 power_metrics.append(self.power_metrics_queue.get())
+            cpu_time = total_time - inference_time
+            gpu_time = inference_time
             
             if power_metrics:
-                total_cpu_energy = sum(power['cpu_power'] for power in power_metrics)
-                total_gpu_energy = sum(power['gpu_power'] for power in power_metrics)
-                total_dram_energy = sum(power['dram_power'] for power in power_metrics)
-                total_energy = sum(power['cpu_power'] + power['dram_power'] + power['gpu_power'] for power in power_metrics)
-                avg_power = total_energy / len(power_metrics)
+                average_cpu_power = sum(power['cpu_power'] for power in power_metrics) / len(power_metrics)
+                total_cpu_energy = average_cpu_power * cpu_time
+
+                average_gpu_power = sum(power['gpu_power'] for power in power_metrics) / len(power_metrics)
+                total_gpu_energy = average_gpu_power * gpu_time
+
+                average_dram_power = sum(power['dram_power'] for power in power_metrics) / len(power_metrics)
+                total_dram_energy = average_dram_power * cpu_time
+
+                total_energy = total_cpu_energy + total_dram_energy + total_gpu_energy
+                avg_power = total_energy / total_time
                 
                 tokens_per_joule = tokens_processed / total_energy if total_energy > 0 else 0
                 samples_per_joule = samples_processed / total_energy if total_energy > 0 else 0
@@ -518,7 +526,7 @@ class InfrastructureMonitor:
                     dram_energy_fraction=total_dram_energy / total_energy,
                     avg_tokens_per_joule=tokens_per_joule,
                     avg_samples_per_joule=samples_per_joule,
-                    measurement_duration=len(power_metrics)
+                    measurement_duration=total_time
                 )
         
         # 存储指标
