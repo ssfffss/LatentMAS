@@ -436,23 +436,23 @@ class InfrastructureAnalyzer:
     def _plot_energy_consumption(self, methods, ax):
         """绘制总能耗对比"""
         energy_data = {}
-        tokens_per_watt = {}
+        tokens_per_joule = {}
         
         for method in methods:
             total_energy = 0
-            total_tokens_per_watt = 0
+            total_tokens_per_joule = 0
             count = 0
             
             for exp in self.data[method]:
                 if 'power_data' in exp and 'power_summary' in exp['power_data']:
                     summary = exp['power_data']['power_summary']
                     total_energy += summary.get('total_energy_consumed', 0)
-                    total_tokens_per_watt += summary.get('avg_tokens_per_watt', 0)
+                    total_tokens_per_joule += summary.get('avg_tokens_per_joule', 0)
                     count += 1
             
             if count > 0:
                 energy_data[method] = total_energy / count
-                tokens_per_watt[method] = total_tokens_per_watt / count
+                tokens_per_joule[method] = total_tokens_per_joule / count
         
         if not energy_data:
             ax.text(0.5, 0.5, 'No power data available', ha='center', va='center')
@@ -467,16 +467,16 @@ class InfrastructureAnalyzer:
         bars1 = ax.bar(x - width/2, energy_values, width, label='Total Energy (J)', color='#ff6b6b', alpha=0.8)
         
         # 设置y轴
-        ax.set_ylabel('Energy Consumption (Watts)', color='#ff6b6b')
+        ax.set_ylabel('Energy Consumption (joules)', color='#ff6b6b')
         ax.tick_params(axis='y', labelcolor='#ff6b6b')
         ax.grid(True, alpha=0.3)
         
         # 创建第二个y轴用于tokens per joule
         ax2 = ax.twinx()
-        efficiency_values = [tokens_per_watt.get(method, 0) for method in methods]
-        bars2 = ax2.bar(x + width/2, efficiency_values, width, label='Tokens/Watt', color='#4ecdc4', alpha=0.8)
+        efficiency_values = [tokens_per_joule.get(method, 0) for method in methods]
+        bars2 = ax2.bar(x + width/2, efficiency_values, width, label='Tokens/joule', color='#4ecdc4', alpha=0.8)
         
-        ax2.set_ylabel('Tokens per Watt', color='#4ecdc4')
+        ax2.set_ylabel('Tokens per joule', color='#4ecdc4')
         ax2.tick_params(axis='y', labelcolor='#4ecdc4')
         
         # 设置标题和标签
@@ -518,7 +518,7 @@ class InfrastructureAnalyzer:
                        label=method, linewidth=2, alpha=0.8)
         
         ax.set_xlabel('Time (seconds)')
-        ax.set_ylabel('Power Draw (Watts)')
+        ax.set_ylabel('Power Draw (joules)')
         ax.set_title('System Power Draw Over Time')
         ax.legend()
         ax.grid(True, alpha=0.3)
@@ -539,15 +539,15 @@ class InfrastructureAnalyzer:
                 if 'power_data' in exp and 'power_summary' in exp['power_data']:
                     summary = exp['power_data']['power_summary']
                     
-                    tokens_per_watt = summary.get('avg_tokens_per_watt', 0)
-                    samples_per_watt = summary.get('avg_samples_per_watt', 0)
+                    tokens_per_joule = summary.get('avg_tokens_per_joule', 0)
+                    samples_per_joule = summary.get('avg_samples_per_joule', 0)
                     gpu_energy_fraction = summary.get('gpu_energy_fraction', 0)
                     cpu_energy_fraction = summary.get('cpu_energy_fraction', 0)
                     
                     # 归一化到0-100范围
                     values.append([
-                        min(tokens_per_watt / 100 * 100, 100),  # 假设100 tokens/J是很好的效率
-                        min(samples_per_watt / 10 * 100, 100),  # 假设10 samples/J是很好的效率
+                        min(tokens_per_joule / 100 * 100, 100),  # 假设100 tokens/J是很好的效率
+                        min(samples_per_joule / 10 * 100, 100),  # 假设10 samples/J是很好的效率
                         gpu_energy_fraction * 100,
                         cpu_energy_fraction * 100
                     ])
