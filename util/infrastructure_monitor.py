@@ -509,8 +509,8 @@ class InfrastructureMonitor:
                 
                 metrics.power = PowerMetrics(
                     total_energy_consumed=total_energy,
-                    avg_power=avg_power,
-                    peak_power=max(power['cpu_power'] + power['dram_power'] + power['gpu_power'] for power in power_metrics) if power_metrics else 0,
+                    avg_power_draw=avg_power,
+                    peak_power_draw=max(power['cpu_power'] + power['dram_power'] + power['gpu_power'] for power in power_metrics) if power_metrics else 0,
                     gpu_energy_fraction=total_gpu_power / total_energy,
                     cpu_energy_fraction=total_cpu_power / total_energy,
                     dram_energy_fraction=total_dram_power / total_energy,
