@@ -124,6 +124,7 @@ class InfrastructureAnalyzer:
         # self._plot_memory_comparison(methods, axes[0, 1])
         # self._plot_network_comparison(methods, axes[1, 0])
         # self._plot_storage_comparison(methods, axes[1, 1])
+        self.plot_power_comparison(methods)
     
     def _plot_compute_comparison(self, methods, ax):
         """绘制计算负载对比"""
