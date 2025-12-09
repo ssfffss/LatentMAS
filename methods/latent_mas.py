@@ -314,7 +314,7 @@ class LatentMASMethod:
                     inference_time=step_inference_time,
                     tokens_processed=step_tokens_processed,
                     samples_processed=batch_size,
-                    total_step_time=step_time
+                    total_time=step_time
                 )
 
             results: List[Dict] = []

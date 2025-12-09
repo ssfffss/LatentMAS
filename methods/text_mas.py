@@ -180,7 +180,7 @@ class TextMASMethod:
                     inference_time=step_inference_time,   # 推理时间
                     tokens_processed=step_tokens_processed,  # 处理的token数
                     samples_processed=batch_size,        # 处理的样本数
-                    total_step_time=step_time
+                    total_time=step_time
                 )
 
             results: List[Dict] = []
