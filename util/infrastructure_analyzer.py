@@ -480,7 +480,7 @@ class InfrastructureAnalyzer:
             if 'compute' in exp_data['summary_stats']:
                 stats = exp_data['summary_stats']['compute']
                 if 'flops_estimate' in stats:
-                    data_by_method[method][task].append(stats['flops_estimate']['mean'].value)
+                    data_by_method[method][task].append(stats['flops_estimate']['mean'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No FLOPS efficiency data available', ha='center', va='center')
@@ -520,7 +520,7 @@ class InfrastructureAnalyzer:
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
-        ax.set_ylim(0, max(max(flops for flops in data_by_method[method].values()) for method in method_names) * 1.3 if data_by_method else 1000)
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]].values()) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _generate_memory_analysis(self, methods):
         """生成内存负载分析图表"""
