@@ -1,6 +1,6 @@
 from datetime import datetime
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -8,7 +8,10 @@ import seaborn as sns
 from pathlib import Path
 from collections import defaultdict
 import math
-
+import os
+import re
+from dataclasses import asdict
+import time
 
 def convert_numpy_types(obj):
     """
@@ -71,692 +74,1591 @@ class NumpyJSONEncoder(json.JSONEncoder):
 
 
 class InfrastructureAnalyzer:
-    def __init__(self, metrics_dir: str = "metrics"):
+    def __init__(self, metrics_dir: str = "metrics", output_dir: str = "analysis_results"):
         self.metrics_dir = Path(metrics_dir)
-        self.data = self._load_all_metrics()
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+        
+        # 加载和聚合实验数据
+        self.raw_data = self._load_all_metrics()
+        self.aggregated_data = self._aggregate_experiments()
+        
+        print(f"✅ Loaded {len(self.raw_data)} raw experiments")
+        print(f"✅ Aggregated into {len(self.aggregated_data)} unique experiments")
+    
+    def _extract_experiment_key(self, experiment_name: str, method: str) -> str:
+        """
+        从实验名称中提取基础实验键，忽略batch和时间戳信息
+        格式: {method}_{model}_{task}_{batch_size} -> {method}_{model}_{task}
+        """
+        # 移除时间戳部分 (最后的数字)
+        base_name = re.sub(r'_[0-9]+$', '', experiment_name)
+        
+        # 尝试解析标准格式
+        parts = base_name.split('_')
+        if len(parts) >= 3:
+            # 格式: method_model_task_batchsize
+            return f"{method}_{parts[1]}_{parts[2]}"
+        
+        return base_name
     
     def _load_all_metrics(self) -> Dict[str, List]:
-        """加载所有指标数据"""
+        """加载所有指标数据，包括功耗数据"""
         all_data = defaultdict(list)
         
+        # 加载主指标文件
         for filepath in self.metrics_dir.glob("*.json"):
-            if '_power.json' in str(filepath):
-                continue  # 跳过功耗文件，稍后单独加载
-            with open(filepath) as f:
-                data = json.load(f)
-                method = data['method']
-                all_data[method].append(data)
-        
-        # 加载功耗指标
-        for method, experiments in all_data.items():
-            for exp in experiments:
-                experiment_name = exp['experiment_name']
-                power_file = self.metrics_dir / f"{experiment_name}_power.json"
-                if power_file.exists():
-                    with open(power_file) as f:
-                        power_data = json.load(f)
-                        exp['power_data'] = power_data
-        
+            if '_power.json' in str(filepath) or 'report' in str(filepath):
+                continue
+            filename, _ = os.path.splitext(os.path.basename(filepath))
+            
+            try:
+                with open(filepath) as f:
+                    data = json.load(f)
+                    method = data.get('method', 'unknown')
+                    # experiment_name = data.get('experiment_name', 'unknown')
+                    
+                    # # 生成唯一标识
+                    # exp_id = f"{method}_{experiment_name}_{Path(filepath).stem.split('_')[-1]}"
+                    # data['file_path'] = str(filepath)
+                    # data['experiment_id'] = exp_id
+
+                    power_pattern = f"{filename}_power.json"
+                    matching_files = list(self.metrics_dir.glob(power_pattern))
+                    if matching_files:
+                        power_file = matching_files[0]  # 取第一个匹配文件
+                    
+                    try:
+                        with open(power_file) as f:
+                            power_data = json.load(f)
+                            data['power_data'] = power_data
+                    except Exception as e:
+                        print(f"⚠️  Error loading power data for {power_pattern}: {e}")
+
+                    all_data[method].append(data)
+                    
+                    
+            except Exception as e:
+                print(f"❌ Error loading {filepath}: {e}")
+    
         return all_data
     
-    def compare_methods(self, methods: List[str] = None):
-        """比较不同方法的性能"""
-        if methods is None:
-            methods = list(self.data.keys())
+    def _aggregate_experiments(self) -> Dict[str, Dict]:
+        """聚合相同实验的不同batch数据"""
+        aggregated = {}
         
-        if not methods:
-            print("No metrics data found. Please run experiments first.")
-            return
+        # 按实验键分组
+        experiment_groups = defaultdict(list)
         
-
-        fig, ax = plt.subplots(figsize=(8, 6))
-        self._plot_compute_comparison(methods, ax)
-        plt.tight_layout()
-        plt.savefig('infrastructure_comparison_compute.png', bbox_inches='tight', dpi=300)
-        plt.close()
-
-        fig, ax = plt.subplots(figsize=(8, 6))
-        self._plot_memory_comparison(methods, ax)
-        plt.tight_layout()
-        plt.savefig('infrastructure_comparison_memory.png', bbox_inches='tight', dpi=300)
-        plt.show()
-
-        # self._plot_memory_comparison(methods, axes[0, 1])
-        # self._plot_network_comparison(methods, axes[1, 0])
-        # self._plot_storage_comparison(methods, axes[1, 1])
-        self.plot_power_comparison(methods)
-    
-    def _plot_compute_comparison(self, methods, ax):
-        """绘制计算负载对比"""
-        compute_data = defaultdict(list)
+        for method, experiments in self.raw_data.items():
+            for exp in experiments:
+                exp_key = self._extract_experiment_key(exp['experiment_name'], method)
+                experiment_groups[exp_key].append(exp)
         
-        for method in methods:
-            for exp in self.data[method]:
-                if 'overall_metrics' in exp and 'compute' in exp['overall_metrics']:
-                    for metric in exp['overall_metrics']['compute']:
-                        compute_data[method].append({
-                            'gpu_util': metric.get('gpu_util', 0),
-                            'inference_time': metric.get('inference_time', 0),
-                            'flops_estimate': metric.get('flops_estimate', 0),
-                            'tokens_per_second': metric.get('tokens_per_second', 0)
-                        })
+        print(f"📊 Found {len(experiment_groups)} experiment groups to aggregate")
         
-        # 计算平均值
-        avg_metrics = defaultdict(dict)
-        for method, metrics in compute_data.items():
-            if metrics:
-                avg_metrics[method] = {
-                    'gpu_util': np.mean([m['gpu_util'] for m in metrics]),
-                    'inference_time': np.mean([m['inference_time'] for m in metrics]),
-                    'flops_estimate': np.mean([m['flops_estimate'] for m in metrics]),
-                    'tokens_per_second': np.mean([m['tokens_per_second'] for m in metrics])
-                }
-        
-        # 创建DataFrame
-        df = pd.DataFrame(avg_metrics).T
-        
-        # 绘制多指标对比
-        x = np.arange(len(methods))
-        width = 0.2
-        
-        ax.bar(x - width*1.5, df['gpu_util'], width, label='GPU Util (%)', alpha=0.8)
-        ax.bar(x - width/2, df['inference_time'] * 10, width, label='Inference Time x10 (s)', alpha=0.8)  # 缩放以便可视化
-        ax.bar(x + width/2, df['flops_estimate'] / 100, width, label='GFLOPS / 100', alpha=0.8)  # 缩放
-        ax.bar(x + width*1.5, df['tokens_per_second'], width, label='Tokens/sec', alpha=0.8)  # 缩放
-        
-        ax.set_xlabel('Communication Method')
-        ax.set_ylabel('Normalized Metrics')
-        ax.set_title('Compute Load Comparison')
-        ax.set_xticks(x)
-        ax.set_xticklabels(methods)
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-    
-    def _plot_memory_comparison(self, methods, ax):
-        """绘制内存负载对比"""
-        memory_data = defaultdict(list)
-        
-        for method in methods:
-            for exp in self.data[method]:
-                if 'overall_metrics' in exp and 'memory' in exp['overall_metrics']:
-                    for metric in exp['overall_metrics']['memory']:
-                        memory_data[method].append({
-                            'vram_allocated': metric.get('vram_allocated', 0),
-                            'kv_cache_size': metric.get('kv_cache_size', 0),
-                            'latent_vector_size': metric.get('latent_vector_size', 0)
-                        })
-        
-        # 计算平均值
-        avg_metrics = defaultdict(dict)
-        for method, metrics in memory_data.items():
-            if metrics:
-                avg_metrics[method] = {
-                    'vram_allocated': np.mean([m['vram_allocated'] for m in metrics]),
-                    'kv_cache_size': np.mean([m['kv_cache_size'] for m in metrics]),
-                    'latent_vector_size': np.mean([m['latent_vector_size'] for m in metrics])
-                }
-        
-        # 创建DataFrame
-        df = pd.DataFrame(avg_metrics).T
-        
-        # 绘制堆叠柱状图
-        x = np.arange(len(methods))
-        width = 0.6
-        
-        bottom = np.zeros(len(methods))
-        colors = ['#ff6b6b', '#4ecdc4', '#45b7d1']
-        
-        for i, (component, color) in enumerate([('vram_allocated', '#ff6b6b'), 
-                                               ('kv_cache_size', '#4ecdc4'), 
-                                               ('latent_vector_size', '#45b7d1')]):
-            values = [df[component].get(method, 0) for method in methods]
-            ax.bar(x, values, width, bottom=bottom, label=component.replace('_', ' ').title(), color=color, alpha=0.8)
-            bottom += values
-        
-        ax.set_xlabel('Communication Method')
-        ax.set_ylabel('Memory Usage (GB)')
-        ax.set_title('Memory Footprint Comparison')
-        ax.set_xticks(x)
-        ax.set_xticklabels(methods)
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-    
-    def _plot_network_comparison(self, methods, ax):
-        """绘制网络通信对比"""
-        network_data = defaultdict(list)
-        
-        for method in methods:
-            for exp in self.data[method]:
-                if 'overall_metrics' in exp and 'network' in exp['overall_metrics']:
-                    for metric in exp['overall_metrics']['network']:
-                        network_data[method].append({
-                            'comm_data_size': metric.get('comm_data_size', 0),
-                            'comm_latency': metric.get('comm_latency', 0),
-                            'bandwidth_usage': metric.get('bandwidth_usage', 0),
-                            'agent_comm_count': metric.get('agent_comm_count', 0)
-                        })
-        
-        # 计算平均值
-        avg_metrics = defaultdict(dict)
-        for method, metrics in network_data.items():
-            if metrics:
-                avg_metrics[method] = {
-                    'comm_data_size': np.mean([m['comm_data_size'] for m in metrics]),
-                    'comm_latency': np.mean([m['comm_latency'] for m in metrics]),
-                    'bandwidth_usage': np.mean([m['bandwidth_usage'] for m in metrics]),
-                    'agent_comm_count': np.mean([m['agent_comm_count'] for m in metrics])
-                }
-        
-        # 创建DataFrame
-        df = pd.DataFrame(avg_metrics).T
-        
-        # 绘制雷达图
-        categories = ['comm_data_size', 'comm_latency', 'bandwidth_usage']
-        N = len(categories)
-        angles = [n / float(N) * 2 * math.pi for n in range(N)]
-        angles += angles[:1]
-        
-        ax = plt.subplot(223, polar=True)
-        
-        for method in methods:
-            if method in df.index:
-                values = df.loc[method, categories].values.flatten().tolist()
-                values += values[:1]
-                ax.plot(angles, values, 'o-', linewidth=2, label=method)
-                ax.fill(angles, values, alpha=0.1)
-        
-        ax.set_xticks(angles[:-1])
-        ax.set_xticklabels([cat.replace('_', ' ').title() for cat in categories])
-        ax.set_title('Network Communication Profile')
-        ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
-    
-    def _plot_storage_comparison(self, methods, ax):
-        """绘制存储对比"""
-        storage_data = defaultdict(list)
-        
-        for method in methods:
-            for exp in self.data[method]:
-                if 'overall_metrics' in exp and 'storage' in exp['overall_metrics']:
-                    for metric in exp['overall_metrics']['storage']:
-                        storage_data[method].append({
-                            'input_data_size': metric.get('input_data_size', 0),
-                            'output_data_size': metric.get('output_data_size', 0),
-                            'intermediate_data_size': metric.get('intermediate_data_size', 0),
-                            'log_data_size': metric.get('log_data_size', 0)
-                        })
-        
-        # 计算总存储需求
-        total_storage = {}
-        for method, metrics in storage_data.items():
-            if metrics:
-                total_storage[method] = {
-                    'total': np.mean([
-                        m['input_data_size'] + m['output_data_size'] + 
-                        m['intermediate_data_size'] + m['log_data_size']
-                        for m in metrics
-                    ]),
-                    'breakdown': {
-                        'input': np.mean([m['input_data_size'] for m in metrics]),
-                        'output': np.mean([m['output_data_size'] for m in metrics]),
-                        'intermediate': np.mean([m['intermediate_data_size'] for m in metrics]),
-                        'log': np.mean([m['log_data_size'] for m in metrics])
-                    }
-                }
-        
-        # 绘制饼图对比
-        if total_storage:
-            method = list(total_storage.keys())[0]  # 使用第一个方法
-            breakdown = total_storage[method]['breakdown']
-            
-            labels = list(breakdown.keys())
-            sizes = list(breakdown.values())
-            colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4']
-            
-            ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
-            ax.set_title(f'Storage Breakdown ({method})')
-    
-    def generate_detailed_report(self):
-        """生成详细报告 - 修复NumPy序列化问题"""
-        report = {
-            'summary': {},
-            'method_comparisons': {},
-            'recommendations': [],
-            'generated_at': datetime.now().isoformat(),
-            'analysis_version': '1.0'
-        }
-        
-        # 计算方法对比
-        method_stats = defaultdict(dict)
-        
-        for method, experiments in self.data.items():
+        for exp_key, experiments in experiment_groups.items():
             if not experiments:
                 continue
             
-            # 提取所有指标
-            all_metrics = defaultdict(list)
+            # 基础元数据（取第一个实验的）
+            base_exp = experiments[0]
+            method = base_exp['method']
+            
+            # 聚合指标
+            aggregated_metrics = {
+                'compute': [],
+                'memory': [],
+                'network': [],
+                'storage': [],
+                'power': []
+            }
+            
+            # 聚合Agent指标
+            aggregated_agents = defaultdict(lambda: defaultdict(list))
+            
+            total_samples = 0
+            total_duration = 0
+            total_tokens = 0
+            
             for exp in experiments:
+                # 聚合整体指标
                 for dimension in ['compute', 'memory', 'network', 'storage', 'power']:
                     if dimension in exp['overall_metrics']:
-                        for metric in exp['overall_metrics'][dimension]:
-                            for key, value in metric.items():
-                                if isinstance(value, (int, float, np.number)):
-                                    all_metrics[f"{dimension}_{key}"].append(value)
+                        aggregated_metrics[dimension].extend(exp['overall_metrics'][dimension])
+                
+                # 聚合Agent指标
+                for agent_name, steps in exp['agent_metrics'].items():
+                    for step_idx, step_metrics in steps.items():
+                        aggregated_agents[agent_name][step_idx].extend(step_metrics)
+                
+                # 累计统计信息
+                total_samples += len(experiments)  # 简化处理，实际应从数据中获取
+                total_duration += exp.get('duration', 0)
+                
+                # 估计token数量
+                if 'compute' in exp['overall_metrics']:
+                    for metric in exp['overall_metrics']['compute']:
+                        total_tokens += metric.get('tokens_per_second', 0) * metric.get('inference_time', 0)
             
-            # 计算统计摘要
-            for metric_name, values in all_metrics.items():
-                if values:
-                    # 确保values是Python原生类型
-                    values = [float(v) if isinstance(v, np.floating) else int(v) if isinstance(v, np.integer) else v for v in values]
+            # 计算平均值和统计信息
+            summary_stats = {}
+            for dimension, metrics in aggregated_metrics.items():
+                if metrics:
+                    df = pd.DataFrame(metrics)
+                    summary_stats[dimension] = {}
+                    for col in df.select_dtypes(include=[np.number]).columns:
+                        summary_stats[dimension][col] = {
+                            'mean': df[col].mean(),
+                            'std': df[col].std(),
+                            'min': df[col].min(),
+                            'max': df[col].max(),
+                            'count': len(df)
+                        }
+            
+            # 创建聚合后的实验数据
+            aggregated[exp_key] = {
+                'experiment_key': exp_key,
+                'method': method,
+                'model': base_exp.get('model', 'unknown'),
+                'task': exp_key.split('_')[2] if len(exp_key.split('_')) > 2 else 'unknown',
+                'batch_count': len(experiments),
+                'total_samples': total_samples,
+                'total_duration': total_duration,
+                'total_tokens': total_tokens,
+                'aggregated_metrics': aggregated_metrics,
+                'agent_metrics': dict(aggregated_agents),
+                'summary_stats': summary_stats,
+                'power_summary': self._aggregate_power_data(experiments),
+                'experiments': experiments  # 保留原始实验数据
+            }
+        
+        return aggregated
+    
+    def _aggregate_power_data(self, experiments: List[Dict]) -> Dict[str, float]:
+        """聚合多个实验的功耗数据"""
+        if not experiments:
+            return {}
+        
+        total_energy = 0.0
+        total_duration = 0.0
+        peak_power = 0.0
+        gpu_energy = 0.0
+        cpu_energy = 0.0
+        dram_energy = 0.0
+        total_tokens = 0
+        total_samples = 0
+        valid_count = 0
+        
+        for exp in experiments:
+            if 'power_data' in exp and 'power_summary' in exp['power_data']:
+                summary = exp['power_data']['power_summary']
+                duration = summary.get('measurement_duration', 0)
+                
+                if duration > 0:
+                    total_energy += summary.get('total_energy_consumed', 0)
+                    total_duration += duration
+                    peak_power = max(peak_power, summary.get('peak_power_draw', 0))
                     
-                    method_stats[method][metric_name] = {
-                        'mean': np.mean(values),
-                        'std': np.std(values),
-                        'min': np.min(values),
-                        'max': np.max(values),
-                        'count': len(values)
-                    }
+                    # 能量占比
+                    energy = summary.get('total_energy_consumed', 0)
+                    gpu_energy += energy * summary.get('gpu_energy_fraction', 0)
+                    cpu_energy += energy * summary.get('cpu_energy_fraction', 0)
+                    dram_energy += energy * summary.get('dram_energy_fraction', 0)
+                    
+                    # 性能指标
+                    total_tokens += summary.get('avg_tokens_per_joule', 0) * energy
+                    total_samples += summary.get('avg_samples_per_joule', 0) * energy
+                    
+                    valid_count += 1
         
-        # 将method_stats转换为可序列化格式
-        report['method_comparisons'] = convert_numpy_types(method_stats)
+        if valid_count == 0 or total_energy == 0:
+            return {}
         
-        # 生成建议
-        if method_stats:
-            latent_methods = [m for m in method_stats.keys() if 'latent' in m.lower()]
-            text_methods = [m for m in method_stats.keys() if 'text' in m.lower() or 'baseline' in m.lower()]
+        # 计算平均指标
+        avg_power = total_energy / total_duration if total_duration > 0 else 0
+        gpu_fraction = gpu_energy / total_energy if total_energy > 0 else 0
+        cpu_fraction = cpu_energy / total_energy if total_energy > 0 else 0
+        dram_fraction = dram_energy / total_energy if total_energy > 0 else 0
+        
+        tokens_per_joule = total_tokens / total_energy if total_energy > 0 else 0
+        samples_per_joule = total_samples / total_energy if total_energy > 0 else 0
+        
+        return {
+            'total_energy_consumed': total_energy,
+            'total_duration': total_duration,
+            'avg_power_draw': avg_power,
+            'peak_power_draw': peak_power,
+            'gpu_energy_fraction': gpu_fraction,
+            'cpu_energy_fraction': cpu_fraction,
+            'dram_energy_fraction': dram_fraction,
+            'avg_tokens_per_joule': tokens_per_joule,
+            'avg_samples_per_joule': samples_per_joule,
+            'experiment_count': valid_count
+        }
+    
+    def compare_methods(self, methods: List[str] = None):
+        """比较不同方法的性能，生成完整报告"""
+        if methods is None:
+            methods = list(set(exp['method'] for exp in self.aggregated_data.values()))
+        
+        print(f"\n{'='*80}")
+        print(f"📊 INFRASTRUCTURE COMPARISON ANALYSIS")
+        print(f"{'='*80}")
+        print(f"Methods to compare: {', '.join(methods)}")
+        print(f"Total unique experiments: {len(self.aggregated_data)}")
+        
+        # 1. 生成计算负载对比
+        self._generate_compute_analysis(methods)
+        
+        # 2. 生成内存负载对比
+        self._generate_memory_analysis(methods)
+        
+        # 3. 生成功耗分析
+        self._generate_power_analysis(methods)
+        
+        # 4. 生成Agent行为分析
+        self._generate_agent_analysis(methods)
+        
+        # 5. 生成综合报告
+        self.generate_comprehensive_report(methods)
+        
+        print(f"\n{'='*80}")
+        print(f"✅ ANALYSIS COMPLETED SUCCESSFULLY")
+        print(f"📈 All charts and reports saved to: {self.output_dir}")
+        print(f"{'='*80}")
+    
+    def _generate_compute_analysis(self, methods):
+        """生成计算负载分析图表"""
+        print("\n⚡ Generating compute analysis...")
+        
+        fig, axes = plt.subplots(2, 2, figsize=(20, 15))
+        fig.suptitle('Compute Infrastructure Analysis', fontsize=18, fontweight='bold')
+        
+        self._plot_inference_time_comparison(methods, axes[0, 0])
+        self._plot_gpu_utilization_comparison(methods, axes[0, 1])
+        self._plot_tokens_per_second_comparison(methods, axes[1, 0])
+        self._plot_flops_efficiency_comparison(methods, axes[1, 1])
+        
+        plt.tight_layout()
+        output_path = self.output_dir / 'compute_infrastructure_analysis.png'
+        plt.savefig(output_path, bbox_inches='tight', dpi=300)
+        plt.close()
+        print(f"✅ Compute analysis saved to: {output_path}")
+    
+    def _plot_inference_time_comparison(self, methods, ax):
+        """绘制推理时间对比"""
+        data_by_method = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
             
-            if latent_methods and text_methods:
-                latent_method = latent_methods[0]
-                text_method = text_methods[0]
+            if 'compute' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['compute']
+                if 'inference_time' in stats:
+                    data_by_method[method].append(stats['inference_time']['mean'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No inference time data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        avg_times = [np.mean(data_by_method[method]) for method in method_names]
+        std_times = [np.std(data_by_method[method]) for method in method_names]
+        
+        x = np.arange(len(method_names))
+        width = 0.6
+        
+        bars = ax.bar(x, avg_times, width, yerr=std_times, capsize=5, 
+                     color=[self._get_method_color(method) for method in method_names],
+                     alpha=0.8, edgecolor='white')
+        
+        # 添加数据标签
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 0.05,
+                   f'{avg_times[i]:.3f}s\n±{std_times[i]:.3f}', 
+                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        ax.set_ylabel('Average Inference Time (seconds)', fontweight='bold')
+        ax.set_title('Inference Time Comparison', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(avg_times) * 1.3 if avg_times else 1)
+    
+    def _plot_gpu_utilization_comparison(self, methods, ax):
+        """绘制GPU利用率对比"""
+        data_by_method = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'compute' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['compute']
+                if 'gpu_util' in stats:
+                    data_by_method[method].append(stats['gpu_util']['mean'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No GPU utilization data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        avg_utils = [np.mean(data_by_method[method]) for method in method_names]
+        std_utils = [np.std(data_by_method[method]) for method in method_names]
+        
+        # 创建水平条形图
+        y = np.arange(len(method_names))
+        height = 0.5
+        
+        bars = ax.barh(y, avg_utils, height, xerr=std_utils, capsize=5,
+                      color=[self._get_method_color(method) for method in method_names],
+                      alpha=0.8, edgecolor='white')
+        
+        # 添加数据标签
+        for i, bar in enumerate(bars):
+            width = bar.get_width()
+            ax.text(width + 2, bar.get_y() + bar.get_height()/2,
+                   f'{avg_utils[i]:.1f}%\n±{std_utils[i]:.1f}', 
+                   ha='left', va='center', fontweight='bold', fontsize=9)
+        
+        ax.set_xlabel('Average GPU Utilization (%)', fontweight='bold')
+        ax.set_title('GPU Utilization Comparison', fontsize=14, fontweight='bold')
+        ax.set_yticks(y)
+        ax.set_yticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.grid(axis='x', alpha=0.3)
+        ax.set_xlim(0, max(avg_utils) * 1.3 if avg_utils else 100)
+    
+    def _plot_tokens_per_second_comparison(self, methods, ax):
+        """绘制Tokens/秒对比"""
+        data_by_method = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'compute' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['compute']
+                if 'tokens_per_second' in stats:
+                    data_by_method[method].append(stats['tokens_per_second']['mean'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No tokens/second data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        avg_tps = [np.mean(data_by_method[method]) for method in method_names]
+        std_tps = [np.std(data_by_method[method]) for method in method_names]
+        
+        x = np.arange(len(method_names))
+        width = 0.6
+        
+        bars = ax.bar(x, avg_tps, width, yerr=std_tps, capsize=5,
+                     color=[self._get_method_color(method) for method in method_names],
+                     alpha=0.8, edgecolor='white')
+        
+        # 添加数据标签
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 10,
+                   f'{avg_tps[i]:.0f}\n±{std_tps[i]:.0f}', 
+                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        ax.set_ylabel('Average Tokens per Second', fontweight='bold')
+        ax.set_title('Token Processing Throughput', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(avg_tps) * 1.3 if avg_tps else 1000)
+    
+    def _plot_flops_efficiency_comparison(self, methods, ax):
+        """绘制FLOPS效率对比"""
+        data_by_method = defaultdict(lambda: defaultdict(list))
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            task = exp_data['task']
+            if 'compute' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['compute']
+                if 'flops_estimate' in stats:
+                    data_by_method[method][task].append(stats['flops_estimate']['mean'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No FLOPS efficiency data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
+        
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
+        
+        for i, method in enumerate(method_names):
+            avg_flops = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_flops.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_flops, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
+        
+        ax.set_ylabel('Average FLOPS (GFLOPS)', fontweight='bold')
+        ax.set_title('FLOPS Efficiency by Task', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method].values()) for method in method_names) * 1.3 if data_by_method else 1000)
+    
+    def _generate_memory_analysis(self, methods):
+        """生成内存负载分析图表"""
+        print("\n📦 Generating memory analysis...")
+        
+        fig, axes = plt.subplots(2, 2, figsize=(20, 15))
+        fig.suptitle('Memory Infrastructure Analysis', fontsize=18, fontweight='bold')
+        
+        self._plot_vram_usage_comparison(methods, axes[0, 0])
+        self._plot_ram_usage_comparison(methods, axes[0, 1])
+        self._plot_kv_cache_comparison(methods, axes[1, 0])
+        self._plot_memory_efficiency_comparison(methods, axes[1, 1])
+        
+        plt.tight_layout()
+        output_path = self.output_dir / 'memory_infrastructure_analysis.png'
+        plt.savefig(output_path, bbox_inches='tight', dpi=300)
+        plt.close()
+        print(f"✅ Memory analysis saved to: {output_path}")
+    
+    def _plot_vram_usage_comparison(self, methods, ax):
+        """绘制VRAM使用对比"""
+        data_by_method = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'memory' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['memory']
+                if 'vram_allocated' in stats:
+                    data_by_method[method].append(stats['vram_allocated']['mean'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No VRAM usage data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        avg_vram = [np.mean(data_by_method[method]) for method in method_names]
+        std_vram = [np.std(data_by_method[method]) for method in method_names]
+        
+        x = np.arange(len(method_names))
+        width = 0.6
+        
+        bars = ax.bar(x, avg_vram, width, yerr=std_vram, capsize=5,
+                     color=[self._get_method_color(method) for method in method_names],
+                     alpha=0.8, edgecolor='white')
+        
+        # 添加数据标签
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 0.5,
+                   f'{avg_vram[i]:.2f}GB\n±{std_vram[i]:.2f}', 
+                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        ax.set_ylabel('Average VRAM Usage (GB)', fontweight='bold')
+        ax.set_title('VRAM Usage Comparison', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(avg_vram) * 1.3 if avg_vram else 24)
+    
+    def _plot_ram_usage_comparison(self, methods, ax):
+        """绘制RAM使用对比"""
+        data_by_method = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'memory' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['memory']
+                if 'ram_used' in stats:
+                    data_by_method[method].append(stats['ram_used']['mean'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No RAM usage data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        avg_ram = [np.mean(data_by_method[method]) for method in method_names]
+        std_ram = [np.std(data_by_method[method]) for method in method_names]
+        
+        x = np.arange(len(method_names))
+        width = 0.6
+        
+        bars = ax.bar(x, avg_ram, width, yerr=std_ram, capsize=5,
+                     color=[self._get_method_color(method) for method in method_names],
+                     alpha=0.8, edgecolor='white')
+        
+        # 添加数据标签
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 0.5,
+                   f'{avg_ram[i]:.2f}GB\n±{std_ram[i]:.2f}', 
+                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        ax.set_ylabel('Average RAM Usage (GB)', fontweight='bold')
+        ax.set_title('System RAM Usage Comparison', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(avg_ram) * 1.3 if avg_ram else 64)
+    
+    def _plot_kv_cache_comparison(self, methods, ax):
+        """绘制KV缓存大小对比"""
+        data_by_method = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'memory' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['memory']
+                if 'kv_cache_size' in stats:
+                    data_by_method[method].append(stats['kv_cache_size']['mean'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No KV cache data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        avg_kv = [np.mean(data_by_method[method]) for method in method_names]
+        std_kv = [np.std(data_by_method[method]) for method in method_names]
+        
+        x = np.arange(len(method_names))
+        width = 0.6
+        
+        bars = ax.bar(x, avg_kv, width, yerr=std_kv, capsize=5,
+                     color=[self._get_method_color(method) for method in method_names],
+                     alpha=0.8, edgecolor='white')
+        
+        # 添加数据标签
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 0.1,
+                   f'{avg_kv[i]:.2f}GB\n±{std_kv[i]:.2f}', 
+                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        ax.set_ylabel('Average KV Cache Size (GB)', fontweight='bold')
+        ax.set_title('KV Cache Size Comparison', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(avg_kv) * 1.3 if avg_kv else 10)
+    
+    def _plot_memory_efficiency_comparison(self, methods, ax):
+        """绘制内存效率对比（VRAM + RAM）"""
+        data_by_method = defaultdict(lambda: {'vram': [], 'ram': []})
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'memory' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['memory']
+                if 'vram_allocated' in stats:
+                    data_by_method[method]['vram'].append(stats['vram_allocated']['mean'])
+                if 'ram_used' in stats:
+                    data_by_method[method]['ram'].append(stats['ram_used']['mean'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No memory efficiency data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        x = np.arange(len(method_names))
+        width = 0.4
+        
+        # VRAM部分
+        vram_means = [np.mean(data_by_method[method]['vram']) for method in method_names]
+        ax.bar(x - width/2, vram_means, width, label='VRAM Usage',
+               color=[self._get_method_color(method) for method in method_names],
+               alpha=0.8, edgecolor='white')
+        
+        # RAM部分
+        ram_means = [np.mean(data_by_method[method]['ram']) for method in method_names]
+        ax.bar(x + width/2, ram_means, width, label='RAM Usage',
+               color=[self._get_method_color(method) for method in method_names],
+               alpha=0.8, hatch='//', edgecolor='white')
+        
+        # 添加数据标签
+        for i, (vram, ram) in enumerate(zip(vram_means, ram_means)):
+            ax.text(x[i] - width/2, vram + 0.5, f'{vram:.2f}GB', 
+                   ha='center', va='bottom', fontsize=8, rotation=45)
+            ax.text(x[i] + width/2, ram + 0.5, f'{ram:.2f}GB', 
+                   ha='center', va='bottom', fontsize=8, rotation=45)
+        
+        ax.set_ylabel('Memory Usage (GB)', fontweight='bold')
+        ax.set_title('Memory Efficiency: VRAM vs RAM', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([method.upper() for method in method_names])
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        max_val = max(max(vram_means), max(ram_means)) if vram_means and ram_means else 10
+        ax.set_ylim(0, max_val * 1.3)
+    
+    def _generate_power_analysis(self, methods):
+        """生成功耗分析图表"""
+        print("\n⚡ Generating power analysis...")
+        
+        # 检查是否有功耗数据
+        has_power_data = any('power_summary' in exp_data and exp_data['power_summary'] 
+                           for exp_data in self.aggregated_data.values())
+        
+        if not has_power_data:
+            print("⚠️  No power data available for analysis")
+            return
+        
+        fig, axes = plt.subplots(2, 2, figsize=(20, 15))
+        fig.suptitle('Power Consumption Analysis', fontsize=18, fontweight='bold')
+        
+        self._plot_energy_consumption(methods, axes[0, 0])
+        self._plot_power_efficiency(methods, axes[0, 1])
+        self._plot_energy_breakdown(methods, axes[1, 0])
+        self._plot_cost_analysis(methods, axes[1, 1])
+        
+        plt.tight_layout()
+        output_path = self.output_dir / 'power_consumption_analysis.png'
+        plt.savefig(output_path, bbox_inches='tight', dpi=300)
+        plt.close()
+        print(f"✅ Power analysis saved to: {output_path}")
+    
+    def _plot_energy_consumption(self, methods, ax):
+        """绘制能耗对比"""
+        data_by_method = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'power_summary' in exp_data and exp_data['power_summary']:
+                summary = exp_data['power_summary']
+                data_by_method[method].append(summary['total_energy_consumed'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No energy consumption data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        avg_energy = [np.mean(data_by_method[method]) for method in method_names]
+        std_energy = [np.std(data_by_method[method]) for method in method_names]
+        
+        x = np.arange(len(method_names))
+        width = 0.6
+        
+        bars = ax.bar(x, avg_energy, width, yerr=std_energy, capsize=5,
+                     color=[self._get_method_color(method) for method in method_names],
+                     alpha=0.8, edgecolor='white')
+        
+        # 添加数据标签
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 1,
+                   f'{avg_energy[i]:.2f}J\n±{std_energy[i]:.2f}', 
+                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        ax.set_ylabel('Total Energy Consumed (Joules)', fontweight='bold')
+        ax.set_title('Energy Consumption per Experiment', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(avg_energy) * 1.3 if avg_energy else 100)
+    
+    def _plot_power_efficiency(self, methods, ax):
+        """绘制能效对比（Tokens/Joule）"""
+        data_by_method = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'power_summary' in exp_data and exp_data['power_summary']:
+                summary = exp_data['power_summary']
+                if 'avg_tokens_per_joule' in summary:
+                    data_by_method[method].append(summary['avg_tokens_per_joule'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No power efficiency data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        avg_efficiency = [np.mean(data_by_method[method]) for method in method_names]
+        std_efficiency = [np.std(data_by_method[method]) for method in method_names]
+        
+        x = np.arange(len(method_names))
+        width = 0.6
+        
+        bars = ax.bar(x, avg_efficiency, width, yerr=std_efficiency, capsize=5,
+                     color=[self._get_method_color(method) for method in method_names],
+                     alpha=0.8, edgecolor='white')
+        
+        # 添加数据标签
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                   f'{avg_efficiency[i]:.1f}\n±{std_efficiency[i]:.1f}', 
+                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        ax.set_ylabel('Tokens per Joule', fontweight='bold')
+        ax.set_title('Energy Efficiency: Tokens per Joule', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(avg_efficiency) * 1.3 if avg_efficiency else 100)
+    
+    def _plot_energy_breakdown(self, methods, ax):
+        """绘制能耗分解（GPU/CPU/DRAM）"""
+        data_by_method = defaultdict(lambda: {'gpu': [], 'cpu': [], 'dram': []})
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'power_summary' in exp_data and exp_data['power_summary']:
+                summary = exp_data['power_summary']
+                data_by_method[method]['gpu'].append(summary['gpu_energy_fraction'])
+                data_by_method[method]['cpu'].append(summary['cpu_energy_fraction'])
+                data_by_method[method]['dram'].append(summary['dram_energy_fraction'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No energy breakdown data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        x = np.arange(len(method_names))
+        width = 0.6
+        
+        # GPU部分
+        gpu_means = [np.mean(data_by_method[method]['gpu']) for method in method_names]
+        bottom = np.zeros(len(method_names))
+        
+        gpu_bars = ax.bar(x, gpu_means, width, bottom=bottom, 
+                         label='GPU Energy', color='#FF6B6B', alpha=0.8)
+        bottom += gpu_means
+        
+        # CPU部分
+        cpu_means = [np.mean(data_by_method[method]['cpu']) for method in method_names]
+        cpu_bars = ax.bar(x, cpu_means, width, bottom=bottom, 
+                         label='CPU Energy', color='#4ECDC4', alpha=0.8)
+        bottom += cpu_means
+        
+        # DRAM部分
+        dram_means = [np.mean(data_by_method[method]['dram']) for method in method_names]
+        dram_bars = ax.bar(x, dram_means, width, bottom=bottom, 
+                          label='DRAM Energy', color='#45B7D1', alpha=0.8)
+        
+        # 添加数据标签
+        for i, (gpu, cpu, dram) in enumerate(zip(gpu_means, cpu_means, dram_means)):
+            total = gpu + cpu + dram
+            if gpu > 0.1:
+                ax.text(x[i], gpu/2, f'GPU: {gpu:.1%}', 
+                       ha='center', va='center', color='white', fontweight='bold', fontsize=8)
+            if cpu > 0.1:
+                ax.text(x[i], gpu + cpu/2, f'CPU: {cpu:.1%}', 
+                       ha='center', va='center', color='white', fontweight='bold', fontsize=8)
+            if dram > 0.1:
+                ax.text(x[i], gpu + cpu + dram/2, f'DRAM: {dram:.1%}', 
+                       ha='center', va='center', color='white', fontweight='bold', fontsize=8)
+        
+        ax.set_ylabel('Energy Fraction', fontweight='bold')
+        ax.set_title('Energy Consumption Breakdown', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([method.upper() for method in method_names])
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, 1.1)
+    
+    def _plot_cost_analysis(self, methods, ax):
+        """绘制成本分析"""
+        data_by_method = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'power_summary' in exp_data and exp_data['power_summary']:
+                summary = exp_data['power_summary']
+                data_by_method[method].append(summary['total_energy_consumed'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No cost analysis data available', ha='center', va='center')
+            return
+        
+        # 估算成本（基于美国平均电价 $0.12/kWh）
+        electricity_cost_per_kwh = 0.12
+        samples_per_day = 1000000  # 1M样本/天
+        days_per_year = 365
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        costs_per_year = []
+        
+        for method in method_names:
+            avg_energy_per_sample = np.mean(data_by_method[method]) / samples_per_day
+            yearly_energy_kwh = (avg_energy_per_sample * samples_per_day * days_per_year) / 3600000
+            yearly_cost = yearly_energy_kwh * electricity_cost_per_kwh
+            costs_per_year.append(yearly_cost)
+        
+        x = np.arange(len(method_names))
+        width = 0.6
+        
+        bars = ax.bar(x, costs_per_year, width,
+                     color=[self._get_method_color(method) for method in method_names],
+                     alpha=0.8, edgecolor='white')
+        
+        # 添加数据标签
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, height + 100,
+                   f'${height:,.0f}', 
+                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        
+        ax.set_ylabel('Estimated Annual Cost ($)', fontweight='bold')
+        ax.set_title(f'Cost Analysis at Scale\n({samples_per_day/1000000:.1f}M samples/day, ${electricity_cost_per_kwh:.2f}/kWh)', 
+                    fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([method.upper() for method in method_names])
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(costs_per_year) * 1.3 if costs_per_year else 10000)
+    
+    def _generate_agent_analysis(self, methods):
+        """生成Agent行为分析图表"""
+        print("\n🤖 Generating agent analysis...")
+        
+        fig, axes = plt.subplots(2, 2, figsize=(20, 15))
+        fig.suptitle('Multi-Agent Behavior Analysis', fontsize=18, fontweight='bold')
+        
+        self._plot_agent_computation_breakdown(methods, axes[0, 0])
+        self._plot_agent_memory_usage(methods, axes[0, 1])
+        self._plot_agent_power_consumption(methods, axes[1, 0])
+        self._plot_agent_efficiency(methods, axes[1, 1])
+        
+        plt.tight_layout()
+        output_path = self.output_dir / 'agent_behavior_analysis.png'
+        plt.savefig(output_path, bbox_inches='tight', dpi=300)
+        plt.close()
+        print(f"✅ Agent analysis saved to: {output_path}")
+    
+    def _plot_agent_computation_breakdown(self, methods, ax):
+        """绘制Agent计算时间分解"""
+        agent_data = defaultdict(lambda: defaultdict(lambda: {'cpu': [], 'gpu': []}))
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            # 从Agent指标中提取数据
+            for agent_name, steps in exp_data['agent_metrics'].items():
+                for step_idx, metrics in steps.items():
+                    for metric in metrics:
+                        compute = metric.get('compute', {})
+                        inference_time = compute.get('inference_time', 0)
+                        total_time = compute.get('total_time', inference_time + 0.1)
+                        
+                        cpu_time = total_time - inference_time
+                        gpu_time = inference_time
+                        
+                        cpu_ratio = cpu_time / total_time if total_time > 0 else 0
+                        gpu_ratio = gpu_time / total_time if total_time > 0 else 0
+                        
+                        agent_data[method][agent_name]['cpu'].append(cpu_ratio)
+                        agent_data[method][agent_name]['gpu'].append(gpu_ratio)
+        
+        if not agent_data:
+            ax.text(0.5, 0.5, 'No agent computation data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(agent_data.keys())
+        agent_names = sorted(set(agent for method_data in agent_data.values() 
+                               for agent in method_data.keys()))
+        
+        x = np.arange(len(agent_names))
+        width = 0.8 / len(method_names)
+        
+        for i, method in enumerate(method_names):
+            cpu_ratios = []
+            gpu_ratios = []
+            
+            for agent in agent_names:
+                if agent in agent_data[method]:
+                    cpu_vals = agent_data[method][agent]['cpu']
+                    gpu_vals = agent_data[method][agent]['gpu']
+                    cpu_ratios.append(np.mean(cpu_vals) if cpu_vals else 0)
+                    gpu_ratios.append(np.mean(gpu_vals) if gpu_vals else 0)
+                else:
+                    cpu_ratios.append(0)
+                    gpu_ratios.append(0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bottom = np.zeros(len(agent_names))
+            
+            # CPU部分
+            cpu_bars = ax.bar(x + offset, cpu_ratios, width, bottom=bottom,
+                            label=f'{method.upper()} CPU',
+                            color=self._get_method_color(method),
+                            alpha=0.3, edgecolor='white')
+            bottom += cpu_ratios
+            
+            # GPU部分
+            gpu_bars = ax.bar(x + offset, gpu_ratios, width, bottom=bottom,
+                            label=f'{method.upper()} GPU',
+                            color=self._get_method_color(method),
+                            alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, (cpu, gpu) in enumerate(zip(cpu_ratios, gpu_ratios)):
+                total = cpu + gpu
+                if total > 0.1:  # 只显示显著的值
+                    cpu_pct = cpu / total * 100
+                    gpu_pct = gpu / total * 100
+                    
+                    if cpu_pct > 15:
+                        ax.text(x[j] + offset, bottom[j] - gpu/2, f'CPU:{cpu_pct:.0f}%', 
+                               ha='center', va='center', fontsize=6, color='black')
+                    if gpu_pct > 15:
+                        ax.text(x[j] + offset, bottom[j] - gpu/2, f'GPU:{gpu_pct:.0f}%', 
+                               ha='center', va='center', fontsize=6, color='white')
+        
+        ax.set_ylabel('Time Ratio', fontweight='bold')
+        ax.set_title('Agent Computation Time Breakdown', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(agent_names, rotation=45, ha='right')
+        ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.0))
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, 1.1)
+    
+    def _plot_agent_memory_usage(self, methods, ax):
+        """绘制Agent内存使用情况"""
+        agent_data = defaultdict(lambda: defaultdict(lambda: {'vram': [], 'ram': []}))
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            for agent_name, steps in exp_data['agent_metrics'].items():
+                for step_idx, metrics in steps.items():
+                    for metric in metrics:
+                        memory = metric.get('memory', {})
+                        vram = memory.get('vram_allocated', 0)
+                        ram = memory.get('ram_used', 0)
+                        
+                        agent_data[method][agent_name]['vram'].append(vram)
+                        agent_data[method][agent_name]['ram'].append(ram)
+        
+        if not agent_data:
+            ax.text(0.5, 0.5, 'No agent memory data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(agent_data.keys())
+        agent_names = sorted(set(agent for method_data in agent_data.values() 
+                               for agent in method_data.keys()))
+        
+        x = np.arange(len(agent_names))
+        width = 0.8 / len(method_names)
+        
+        max_value = 0
+        
+        for i, method in enumerate(method_names):
+            vram_means = []
+            ram_means = []
+            
+            for agent in agent_names:
+                if agent in agent_data[method]:
+                    vram_vals = agent_data[method][agent]['vram']
+                    ram_vals = agent_data[method][agent]['ram']
+                    vram_means.append(np.mean(vram_vals) if vram_vals else 0)
+                    ram_means.append(np.mean(ram_vals) if ram_vals else 0)
+                else:
+                    vram_means.append(0)
+                    ram_means.append(0)
+            
+            max_value = max(max_value, max(vram_means), max(ram_means))
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            
+            # VRAM部分
+            vram_bars = ax.bar(x + offset, vram_means, width,
+                             label=f'{method.upper()} VRAM',
+                             color=self._get_method_color(method),
+                             alpha=0.8, edgecolor='white')
+            
+            # RAM部分 (堆叠在VRAM上方)
+            ram_bars = ax.bar(x + offset, ram_means, width, bottom=vram_means,
+                            label=f'{method.upper()} RAM',
+                            color=self._get_method_color(method),
+                            alpha=0.8, hatch='//', edgecolor='white')
+            
+            # 添加数据标签
+            for j, (vram, ram) in enumerate(zip(vram_means, ram_means)):
+                if vram > 0.5:
+                    ax.text(x[j] + offset, vram/2, f'{vram:.1f}GB', 
+                           ha='center', va='center', fontsize=6, color='white')
+                if ram > 0.5:
+                    ax.text(x[j] + offset, vram + ram/2, f'{ram:.1f}GB', 
+                           ha='center', va='center', fontsize=6, color='black')
+        
+        ax.set_ylabel('Memory Usage (GB)', fontweight='bold')
+        ax.set_title('Agent Memory Usage Comparison', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(agent_names, rotation=45, ha='right')
+        ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.0))
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max_value * 1.3 if max_value > 0 else 24)
+    
+    def _plot_agent_power_consumption(self, methods, ax):
+        """绘制Agent功耗分析"""
+        agent_data = defaultdict(lambda: defaultdict(list))
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'power_summary' in exp_data and exp_data['power_summary']:
+                # 这里需要更细粒度的Agent功耗数据
+                # 临时使用整体功耗数据作为替代
+                total_energy = exp_data['power_summary']['total_energy_consumed']
+                agent_count = len(exp_data['agent_metrics'])
                 
-                # 比较关键指标 - 确保转换为Python原生类型
-                latent_compute = float(method_stats[latent_method].get('compute_inference_time', {}).get('mean', float('inf')))
-                text_compute = float(method_stats[text_method].get('compute_inference_time', {}).get('mean', float('inf')))
+                for agent_name in exp_data['agent_metrics'].keys():
+                    agent_data[method][agent_name].append(total_energy / agent_count if agent_count > 0 else 0)
+        
+        if not agent_data:
+            ax.text(0.5, 0.5, 'No agent power data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(agent_data.keys())
+        agent_names = sorted(set(agent for method_data in agent_data.values() 
+                               for agent in method_data.keys()))
+        
+        x = np.arange(len(agent_names))
+        width = 0.8 / len(method_names)
+        
+        for i, method in enumerate(method_names):
+            energy_means = []
+            
+            for agent in agent_names:
+                if agent in agent_data[method]:
+                    energy_means.append(np.mean(agent_data[method][agent]))
+                else:
+                    energy_means.append(0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, energy_means, width,
+                        label=method.upper(),
+                        color=self._get_method_color(method),
+                        alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 1:  # 只显示显著的值
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 0.5,
+                           f'{height:.1f}J', 
+                           ha='center', va='bottom', fontsize=8)
+        
+        ax.set_ylabel('Energy per Agent (Joules)', fontweight='bold')
+        ax.set_title('Agent Power Consumption Comparison', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(agent_names, rotation=45, ha='right')
+        ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.0))
+        ax.grid(axis='y', alpha=0.3)
+        max_val = max(max(energy_means) for energy_means in agent_data.values()) if agent_data else 100
+        ax.set_ylim(0, max_val * 1.3)
+    
+    def _plot_agent_efficiency(self, methods, ax):
+        """绘制Agent效率分析（Tokens/Joule）"""
+        agent_data = defaultdict(lambda: defaultdict(list))
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'power_summary' in exp_data and exp_data['power_summary']:
+                tokens_per_joule = exp_data['power_summary'].get('avg_tokens_per_joule', 0)
+                for agent_name in exp_data['agent_metrics'].keys():
+                    agent_data[method][agent_name].append(tokens_per_joule)
+        
+        if not agent_data:
+            ax.text(0.5, 0.5, 'No agent efficiency data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(agent_data.keys())
+        agent_names = sorted(set(agent for method_data in agent_data.values() 
+                               for agent in method_data.keys()))
+        
+        x = np.arange(len(agent_names))
+        width = 0.8 / len(method_names)
+        
+        for i, method in enumerate(method_names):
+            efficiency_means = []
+            
+            for agent in agent_names:
+                if agent in agent_data[method]:
+                    efficiency_means.append(np.mean(agent_data[method][agent]))
+                else:
+                    efficiency_means.append(0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, efficiency_means, width,
+                        label=method.upper(),
+                        color=self._get_method_color(method),
+                        alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 10:  # 只显示显著的值
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.0f}', 
+                           ha='center', va='bottom', fontsize=8)
+        
+        ax.set_ylabel('Tokens per Joule', fontweight='bold')
+        ax.set_title('Agent Energy Efficiency', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(agent_names, rotation=45, ha='right')
+        ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.0))
+        ax.grid(axis='y', alpha=0.3)
+        max_val = max(max(efficiency_means) for efficiency_means in agent_data.values()) if agent_data else 100
+        ax.set_ylim(0, max_val * 1.3)
+    
+    def _get_method_color(self, method: str) -> str:
+        """获取方法对应的颜色"""
+        color_map = {
+            'latent_mas': '#4ECDC4',  # 青色 - 表示优化
+            'text_mas': '#FF6B6B',    # 红色 - 表示基线
+            'baseline': '#45B7D1',    # 蓝色 - 表示单Agent
+            'cpu': '#96CEB4',         # 绿色
+            'gpu': '#FECA57',         # 橙色
+            'ram': '#A78BFA',         # 紫色
+            'vram': '#F08080',        # 粉色
+        }
+        return color_map.get(method.lower(), '#95A5A6')
+    
+    def generate_comprehensive_report(self, methods: List[str]):
+        """生成综合报告"""
+        report = {
+            'metadata': {
+                'generated_at': datetime.now().isoformat(),
+                'analysis_version': '1.0',
+                'metrics_dir': str(self.metrics_dir),
+                'total_experiments': len(self.aggregated_data),
+                'methods_analyzed': methods
+            },
+            'summary': {},
+            'method_comparisons': {},
+            'recommendations': [],
+            'insights': {}
+        }
+        
+        # 1. 计算关键指标
+        method_stats = defaultdict(dict)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            # 基础统计
+            inference_time = exp_data['summary_stats']['compute']['inference_time']['mean'] if 'compute' in exp_data['summary_stats'] and 'inference_time' in exp_data['summary_stats']['compute'] else 0
+            vram_usage = exp_data['summary_stats']['memory']['vram_allocated']['mean'] if 'memory' in exp_data['summary_stats'] and 'vram_allocated' in exp_data['summary_stats']['memory'] else 0
+            tokens_per_second = exp_data['summary_stats']['compute']['tokens_per_second']['mean'] if 'compute' in exp_data['summary_stats'] and 'tokens_per_second' in exp_data['summary_stats']['compute'] else 0
+            
+            # 功耗统计
+            energy_efficiency = 0
+            cost_per_million = 0
+            
+            if 'power_summary' in exp_data and exp_data['power_summary']:
+                power_summary = exp_data['power_summary']
+                energy_efficiency = power_summary.get('avg_tokens_per_joule', 0)
                 
-                latent_memory = float(method_stats[latent_method].get('memory_vram_allocated', {}).get('mean', float('inf')))
-                text_memory = float(method_stats[text_method].get('memory_vram_allocated', {}).get('mean', float('inf')))
+                # 估算成本
+                electricity_cost_per_kwh = 0.12
+                samples_per_day = 1000000
+                energy_per_sample = power_summary.get('total_energy_consumed', 0) / exp_data['total_samples'] if exp_data['total_samples'] > 0 else 0
+                daily_energy_kwh = (energy_per_sample * samples_per_day) / 3600000
+                daily_cost = daily_energy_kwh * electricity_cost_per_kwh
+                cost_per_million = daily_cost
+            
+            method_stats[method][exp_key] = {
+                'inference_time': inference_time,
+                'vram_usage': vram_usage,
+                'tokens_per_second': tokens_per_second,
+                'energy_efficiency': energy_efficiency,
+                'cost_per_million': cost_per_million
+            }
+        
+        # 2. 生成方法对比
+        if method_stats:
+            report['method_comparisons'] = convert_numpy_types(method_stats)
+            
+            # 3. 生成建议
+            if 'latent_mas' in method_stats and ('text_mas' in method_stats or 'baseline' in method_stats):
+                latent_stats = method_stats['latent_mas']
+                comparison_method = 'text_mas' if 'text_mas' in method_stats else 'baseline'
+                comparison_stats = method_stats[comparison_method]
                 
-                latent_network = float(method_stats[latent_method].get('network_comm_data_size', {}).get('mean', float('inf')))
-                text_network = float(method_stats[text_method].get('network_comm_data_size', {}).get('mean', float('inf')))
+                # 性能对比
+                latent_inference = np.mean([stats['inference_time'] for stats in latent_stats.values()])
+                comparison_inference = np.mean([stats['inference_time'] for stats in comparison_stats.values()])
                 
-                # 生成建议
-                if latent_compute < text_compute * 0.7:
-                    savings_pct = ((text_compute - latent_compute) / text_compute * 100)
+                # VRAM对比
+                latent_vram = np.mean([stats['vram_usage'] for stats in latent_stats.values()])
+                comparison_vram = np.mean([stats['vram_usage'] for stats in comparison_stats.values()])
+                
+                # 能效对比
+                latent_efficiency = np.mean([stats['energy_efficiency'] for stats in latent_stats.values()])
+                comparison_efficiency = np.mean([stats['energy_efficiency'] for stats in comparison_stats.values()])
+                
+                # 生成具体建议
+                if latent_inference < comparison_inference * 0.7:
+                    savings_pct = (1 - latent_inference / comparison_inference) * 100
                     report['recommendations'].append(
                         f"LatentMAS reduces inference time by {savings_pct:.1f}%, "
                         f"making it ideal for latency-sensitive applications."
                     )
                 
-                if latent_memory < text_memory * 0.85:
-                    savings_pct = ((text_memory - latent_memory) / text_memory * 100)
+                if latent_vram < comparison_vram * 0.85:
+                    savings_pct = (1 - latent_vram / comparison_vram) * 100
                     report['recommendations'].append(
                         f"LatentMAS reduces VRAM usage by {savings_pct:.1f}%, "
                         f"enabling deployment on lower-memory GPUs."
                     )
                 
-                if latent_network < text_network * 0.3:
-                    savings_pct = ((text_network - latent_network) / text_network * 100)
+                if latent_efficiency > comparison_efficiency * 1.5:
+                    improvement_pct = (latent_efficiency / comparison_efficiency - 1) * 100
                     report['recommendations'].append(
-                        f"LatentMAS reduces communication data size by {savings_pct:.1f}%, "
-                        f"significantly lowering network bandwidth requirements."
+                        f"LatentMAS improves energy efficiency by {improvement_pct:.1f}%, "
+                        f"providing significant cost savings at scale."
                     )
         
-        # 保存报告 - 使用转换函数
-        report_path = 'infrastructure_analysis_report.json'
-        with open(report_path, 'w') as f:
-            # 使用转换函数确保所有数据可序列化
-            json.dump(convert_numpy_types(report), f, indent=2, cls=NumpyJSONEncoder)
-        
-        print("\n" + "="*60)
-        print("INFRASTRUCTURE ANALYSIS REPORT")
-        print("="*60)
-        print(f"Report generated and saved to: {report_path}")
-        print(f"Analysis completed with {len(self.data)} methods analyzed")
-        print("\nKEY RECOMMENDATIONS:")
-        for i, rec in enumerate(report['recommendations'], 1):
-            print(f"{i}. {rec}")
-        print("="*60)
-        
-        return convert_numpy_types(report)
-    
-    def plot_power_comparison(self, methods: List[str] = None):
-        """绘制功耗对比图表"""
-        if methods is None:
-            methods = list(self.data.keys())
-        
-        if not methods:
-            print("No metrics data found. Please run experiments first.")
-            return
-        
-        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
-        self._plot_energy_consumption(methods, axes)
-        plt.tight_layout()
-        plt.savefig('energy_consumption_analysis.png', bbox_inches='tight', dpi=300)
-        plt.close()
-
-        #fig.suptitle('Power Consumption Analysis: Multi-Agent Communication Methods', fontsize=16)
-        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
-        self._plot_power_draw_over_time(methods, axes)
-        plt.tight_layout()
-        plt.savefig('power_draw_analysis.png', bbox_inches='tight', dpi=300)
-        plt.close()
-
-        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
-        self._plot_energy_efficiency(methods, axes)
-        plt.tight_layout()
-        plt.savefig('energy_efficiency_analysis.png', bbox_inches='tight', dpi=300)
-        plt.close()
-
-        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
-        self._plot_gpu_cpu_power_breakdown(methods, axes)
-        plt.tight_layout()
-        plt.savefig('power_breakdown_analysis.png', bbox_inches='tight', dpi=300)
-        plt.close()
-        
-    
-    def _plot_energy_consumption(self, methods, ax):
-        """绘制总能耗对比"""
-        energy_data = {}
-        tokens_per_joule = {}
-        
-        for method in methods:
-            total_energy = 0
-            total_tokens_per_joule = 0
-            count = 0
-            
-            for exp in self.data[method]:
-                if 'power_data' in exp and 'power_summary' in exp['power_data']:
-                    summary = exp['power_data']['power_summary']
-                    total_energy += summary.get('total_energy_consumed', 0)
-                    total_tokens_per_joule += summary.get('avg_tokens_per_joule', 0)
-                    count += 1
-            
-            if count > 0:
-                energy_data[method] = total_energy / count
-                tokens_per_joule[method] = total_tokens_per_joule / count
-        
-        if not energy_data:
-            ax.text(0.5, 0.5, 'No power data available', ha='center', va='center')
-            return
-        
-        # 创建双柱状图
-        x = np.arange(len(methods))
-        width = 0.35
-        
-        # 能耗柱状图
-        energy_values = [energy_data.get(method, 0) for method in methods]
-        bars1 = ax.bar(x - width/2, energy_values, width, label='Total Energy (J)', color='#ff6b6b', alpha=0.8)
-        
-        # 设置y轴
-        ax.set_ylabel('Energy Consumption (joules)', color='#ff6b6b')
-        ax.tick_params(axis='y', labelcolor='#ff6b6b')
-        ax.grid(True, alpha=0.3)
-        
-        # 创建第二个y轴用于tokens per joule
-        ax2 = ax.twinx()
-        efficiency_values = [tokens_per_joule.get(method, 0) for method in methods]
-        bars2 = ax2.bar(x + width/2, efficiency_values, width, label='Tokens/joule', color='#4ecdc4', alpha=0.8)
-        
-        ax2.set_ylabel('Tokens per joule', color='#4ecdc4')
-        ax2.tick_params(axis='y', labelcolor='#4ecdc4')
-        
-        # 设置标题和标签
-        ax.set_xlabel('Communication Method')
-        ax.set_title('Energy Consumption vs Energy Efficiency')
-        ax.set_xticks(x)
-        ax.set_xticklabels(methods)
-        
-        # 添加图例
-        lines1, labels1 = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
-        
-        # 添加数据标签
-        for i, (bar1, bar2) in enumerate(zip(bars1, bars2)):
-            ax.text(bar1.get_x() + bar1.get_width()/2, bar1.get_height() + 0.1,
-                   f'{energy_values[i]:.1f}J', ha='center', va='bottom', color='#ff6b6b')
-            ax2.text(bar2.get_x() + bar2.get_width()/2, bar2.get_height() + 0.1,
-                    f'{efficiency_values[i]:.1f}', ha='center', va='bottom', color='#4ecdc4')
-    
-    def _plot_power_draw_over_time(self, methods, ax):
-        """绘制功耗随时间变化"""
-        for method in methods:
-            power_over_time = []
-            time_points = []
-            
-            for exp in self.data[method]:
-                if 'power_data' in exp and 'power_metrics' in exp['power_data']:
-                    metrics = exp['power_data']['power_metrics']
-                    for entry in metrics:
-                        power_over_time.append(entry['total_energy_consumed'])
-                        time_points.append(entry['timestamp'])
-            
-            if power_over_time:
-                # 采样数据点避免过多
-                sample_indices = np.linspace(0, len(power_over_time)-1, 100).astype(int)
-                ax.plot([time_points[i] for i in sample_indices], 
-                       [power_over_time[i] for i in sample_indices],
-                       label=method, linewidth=2, alpha=0.8)
-        
-        ax.set_xlabel('Time (seconds)')
-        ax.set_ylabel('Power Draw (joules)')
-        ax.set_title('System Power Draw Over Time')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-    
-    def _plot_energy_efficiency(self, methods, ax):
-        """绘制能效对比（雷达图）"""
-        categories = ['Tokens/Joule', 'Samples/Joule', 'GPU Efficiency', 'CPU Efficiency']
-        N = len(categories)
-        angles = [n / float(N) * 2 * np.pi for n in range(N)]
-        angles += angles[:1]
-        
-        ax = plt.subplot(223, polar=True)
-        
-        for method in methods:
-            values = []
-            
-            for exp in self.data[method]:
-                if 'power_data' in exp and 'power_summary' in exp['power_data']:
-                    summary = exp['power_data']['power_summary']
-                    
-                    tokens_per_joule = summary.get('avg_tokens_per_joule', 0)
-                    samples_per_joule = summary.get('avg_samples_per_joule', 0)
-                    gpu_energy_fraction = summary.get('gpu_energy_fraction', 0)
-                    cpu_energy_fraction = summary.get('cpu_energy_fraction', 0)
-                    
-                    # 归一化到0-100范围
-                    values.append([
-                        min(tokens_per_joule / 100 * 100, 100),  # 假设100 tokens/J是很好的效率
-                        min(samples_per_joule / 10 * 100, 100),  # 假设10 samples/J是很好的效率
-                        gpu_energy_fraction * 100,
-                        cpu_energy_fraction * 100
-                    ])
-            
-            if values:
-                avg_values = np.mean(values, axis=0).tolist()
-                avg_values += avg_values[:1]  # 闭合雷达图
-                
-                ax.plot(angles, avg_values, 'o-', linewidth=2, label=method)
-                ax.fill(angles, avg_values, alpha=0.1)
-        
-        ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(categories)
-        ax.set_title('Energy Efficiency Profile')
-        ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
-    
-    def _plot_gpu_cpu_power_breakdown(self, methods, ax):
-        """绘制GPU/CPU功耗占比"""
-        gpu_percentages = []
-        method_names = []
-        
-        for method in methods:
-            gpu_energy_fractions = []
-            
-            for exp in self.data[method]:
-                if 'power_data' in exp and 'power_summary' in exp['power_data']:
-                    summary = exp['power_data']['power_summary']
-                    gpu_energy_fractions.append(summary.get('gpu_energy_fraction', 0) * 100)
-            
-            if gpu_energy_fractions:
-                gpu_percentages.append(np.mean(gpu_energy_fractions))
-                method_names.append(method)
-        
-        if not gpu_percentages:
-            ax.text(0.5, 0.5, 'No GPU/CPU breakdown data', ha='center', va='center')
-            return
-        
-        # 创建堆叠柱状图
-        x = np.arange(len(method_names))
-        width = 0.6
-        
-        # GPU部分
-        gpu_bars = ax.bar(x, gpu_percentages, width, label='GPU Power', color='#45b7d1')
-        
-        # CPU部分
-        cpu_percentages = [100 - gpu_pct for gpu_pct in gpu_percentages]
-        ax.bar(x, cpu_percentages, width, bottom=gpu_percentages, label='CPU Power', color='#96ceb4')
-        
-        ax.set_ylabel('Power Consumption Percentage (%)')
-        ax.set_title('GPU vs CPU Power Consumption Breakdown')
-        ax.set_xticks(x)
-        ax.set_xticklabels(method_names)
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        
-        # 添加数据标签
-        for i, (gpu_bar, gpu_pct) in enumerate(zip(gpu_bars, gpu_percentages)):
-            height = gpu_bar.get_height()
-            ax.text(gpu_bar.get_x() + gpu_bar.get_width()/2, height/2,
-                   f'GPU: {gpu_pct:.1f}%', ha='center', va='center', color='white', fontweight='bold')
-            ax.text(gpu_bar.get_x() + gpu_bar.get_width()/2, height + cpu_percentages[i]/2,
-                   f'CPU: {cpu_percentages[i]:.1f}%', ha='center', va='center', color='black', fontweight='bold')
-    
-
-    def generate_energy_efficiency_report(self):
-        """生成能效优化报告 - 修复NumPy序列化问题"""
-        report = {
-            'power_summary': {},
-            'efficiency_recommendations': [],
-            'cost_analysis': {},
-            'generated_at': datetime.now().isoformat()
+        # 4. 生成关键洞察
+        report['insights'] = {
+            'compute_insights': self._generate_compute_insights(methods),
+            'memory_insights': self._generate_memory_insights(methods),
+            'power_insights': self._generate_power_insights(methods),
+            'agent_insights': self._generate_agent_insights(methods)
         }
         
-        # 分析不同方法的能效
-        method_efficiency = {}
-        
-        for method, experiments in self.data.items():
-            if not experiments:
-                continue
-            
-            total_energy = 0.0
-            total_samples = 0
-            total_tokens = 0
-            peak_power = 0.0
-            count = 0
-            
-            for exp in experiments:
-                if 'power_data' in exp and 'power_summary' in exp['power_data']:
-                    summary = exp['power_data']['power_summary']
-                    total_energy += float(summary.get('total_energy_consumed', 0.0))
-                    total_samples += len(exp.get('results', []))
-                    # 估计处理的token数
-                    if 'tokens_processed_total' in exp.get('experiment_config', {}):
-                        total_tokens += int(exp['experiment_config']['tokens_processed_total'])
-                    peak_power = max(peak_power, float(summary.get('peak_power_draw', 0.0)))
-                    count += 1
-            
-            if count > 0 and total_samples > 0:
-                energy_per_sample = total_energy / total_samples
-                tokens_per_joule = total_tokens / total_energy if total_energy > 0 else 0.0
-                
-                method_efficiency[method] = {
-                    'energy_per_sample': energy_per_sample,
-                    'tokens_per_joule': tokens_per_joule,
-                    'peak_power': peak_power,
-                    'total_energy': total_energy,
-                    'total_samples': total_samples,
-                    'total_tokens': total_tokens
-                }
-        
-        # 生成对比和建议
-        if method_efficiency:
-            # 找出最优方法
-            best_method_energy = min(method_efficiency.items(), key=lambda x: x[1]['energy_per_sample'])
-            best_method_efficiency = max(method_efficiency.items(), key=lambda x: x[1]['tokens_per_joule'])
-            
-            # 转换为可序列化格式
-            report['power_summary'] = convert_numpy_types(method_efficiency)
-            
-            # 生成建议
-            if 'latent_mas' in method_efficiency and 'text_mas' in method_efficiency:
-                latent_energy = float(method_efficiency['latent_mas']['energy_per_sample'])
-                text_energy = float(method_efficiency['text_mas']['energy_per_sample'])
-                
-                energy_savings_pct = (text_energy - latent_energy) / text_energy * 100 if text_energy > 0 else 0
-                
-                report['efficiency_recommendations'].append(
-                    f"LatentMAS reduces energy consumption per sample by {energy_savings_pct:.1f}% compared to Text-MAS"
-                )
-                
-                # 估算成本节省
-                electricity_cost_per_kwh = 0.12  # $0.12 per kWh (美国平均)
-                samples_per_day = 1000000  # 假设每天100万样本
-                
-                text_daily_energy_kwh = (text_energy * samples_per_day) / 3600000  # J to kWh
-                latent_daily_energy_kwh = (latent_energy * samples_per_day) / 3600000
-                
-                text_daily_cost = text_daily_energy_kwh * electricity_cost_per_kwh
-                latent_daily_cost = latent_daily_energy_kwh * electricity_cost_per_kwh
-                
-                daily_savings = text_daily_cost - latent_daily_cost
-                yearly_savings = daily_savings * 365
-                
-                report['cost_analysis'] = {
-                    'electricity_cost_per_kwh': electricity_cost_per_kwh,
-                    'samples_per_day': samples_per_day,
-                    'text_daily_cost': text_daily_cost,
-                    'latent_daily_cost': latent_daily_cost,
-                    'daily_savings': daily_savings,
-                    'yearly_savings': yearly_savings,
-                    'energy_savings_pct': energy_savings_pct
-                }
-                
-                report['efficiency_recommendations'].append(
-                    f"At scale (1M samples/day), LatentMAS saves ${daily_savings:.2f}/day or ${yearly_savings:.2f}/year in electricity costs"
-                )
-                
-                # 硬件要求分析
-                if 'peak_power' in method_efficiency['latent_mas'] and 'peak_power' in method_efficiency['text_mas']:
-                    latent_peak_power = float(method_efficiency['latent_mas']['peak_power'])
-                    text_peak_power = float(method_efficiency['text_mas']['peak_power'])
-                    
-                    power_reduction_pct = (text_peak_power - latent_peak_power) / text_peak_power * 100 if text_peak_power > 0 else 0
-                    
-                    report['efficiency_recommendations'].append(
-                        f"LatentMAS reduces peak power requirements by {power_reduction_pct:.1f}%, enabling deployment on lower-power infrastructure"
-                    )
-        
-        # 保存报告 - 使用转换函数
-        report_path = 'energy_efficiency_report.json'
+        # 5. 保存报告
+        report_path = self.output_dir / 'infrastructure_analysis_report.json'
         with open(report_path, 'w') as f:
-            json.dump(convert_numpy_types(report), f, indent=2)
+            json.dump(convert_numpy_types(report), f, indent=2, cls=NumpyJSONEncoder)
         
-        print("\n" + "="*60)
-        print("ENERGY EFFICIENCY ANALYSIS REPORT")
-        print("="*60)
+        print(f"\n{'='*80}")
+        print("📋 COMPREHENSIVE ANALYSIS REPORT")
+        print(f"{'='*80}")
+        print(f"Report saved to: {report_path}")
+        print(f"\n📊 KEY INSIGHTS:")
         
-        if report['efficiency_recommendations']:
-            print("\nKEY RECOMMENDATIONS:")
-            for i, rec in enumerate(report['efficiency_recommendations'], 1):
+        for category, insights in report['insights'].items():
+            print(f"\n{category.replace('_', ' ').title()}:")
+            for insight in insights:
+                print(f"• {insight}")
+        
+        if report['recommendations']:
+            print(f"\n💡 KEY RECOMMENDATIONS:")
+            for i, rec in enumerate(report['recommendations'], 1):
                 print(f"{i}. {rec}")
         
-        if report['cost_analysis']:
-            cost = report['cost_analysis']
-            print(f"\nCOST SAVINGS AT SCALE:")
-            print(f"  Daily savings: ${cost['daily_savings']:.2f}")
-            print(f"  Yearly savings: ${cost['yearly_savings']:.2f}")
-            print(f"  Power reduction: {cost['energy_savings_pct']:.1f}%")
+        print(f"{'='*80}")
         
-        print("="*60)
+        return report
+    
+    def _generate_compute_insights(self, methods) -> List[str]:
+        """生成计算相关的洞察"""
+        insights = []
         
-        return convert_numpy_types(report)
+        # 分析推理时间
+        inference_times = defaultdict(list)
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            if 'compute' in exp_data['summary_stats'] and 'inference_time' in exp_data['summary_stats']['compute']:
+                inference_times[method].append(exp_data['summary_stats']['compute']['inference_time']['mean'])
+        
+        if inference_times:
+            fastest_method = min(inference_times.items(), key=lambda x: np.mean(x[1]) if x[1] else float('inf'))[0]
+            slowest_method = max(inference_times.items(), key=lambda x: np.mean(x[1]) if x[1] else 0)[0]
+            
+            if fastest_method != slowest_method:
+                insights.append(
+                    f"{fastest_method.upper()} achieves {np.mean(inference_times[slowest_method])/np.mean(inference_times[fastest_method]):.1f}x "
+                    f"faster inference compared to {slowest_method.upper()}"
+                )
+        
+        return insights
+    
+    def _generate_memory_insights(self, methods) -> List[str]:
+        """生成内存相关的洞察"""
+        insights = []
+        
+        vram_usage = defaultdict(list)
+        kv_cache_size = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'memory' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['memory']
+                if 'vram_allocated' in stats:
+                    vram_usage[method].append(stats['vram_allocated']['mean'])
+                if 'kv_cache_size' in stats:
+                    kv_cache_size[method].append(stats['kv_cache_size']['mean'])
+        
+        if vram_usage:
+            most_efficient = min(vram_usage.items(), key=lambda x: np.mean(x[1]) if x[1] else float('inf'))[0]
+            least_efficient = max(vram_usage.items(), key=lambda x: np.mean(x[1]) if x[1] else 0)[0]
+            
+            if most_efficient != least_efficient:
+                insights.append(
+                    f"{most_efficient.upper()} uses {np.mean(vram_usage[least_efficient])/np.mean(vram_usage[most_efficient]):.1f}x "
+                    f"less VRAM compared to {least_efficient.upper()}"
+                )
+        
+        if kv_cache_size:
+            smallest_kv = min(kv_cache_size.items(), key=lambda x: np.mean(x[1]) if x[1] else float('inf'))[0]
+            largest_kv = max(kv_cache_size.items(), key=lambda x: np.mean(x[1]) if x[1] else 0)[0]
+            
+            if smallest_kv != largest_kv:
+                insights.append(
+                    f"{smallest_kv.upper()} reduces KV cache size by {1 - np.mean(kv_cache_size[smallest_kv])/np.mean(kv_cache_size[largest_kv]):.1%}, "
+                    f"significantly improving memory efficiency"
+                )
+        
+        return insights
+    
+    def _generate_power_insights(self, methods) -> List[str]:
+        """生成功耗相关的洞察"""
+        insights = []
+        
+        energy_efficiency = defaultdict(list)
+        total_energy = defaultdict(list)
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            if 'power_summary' in exp_data and exp_data['power_summary']:
+                summary = exp_data['power_summary']
+                energy_efficiency[method].append(summary.get('avg_tokens_per_joule', 0))
+                total_energy[method].append(summary.get('total_energy_consumed', 0))
+        
+        if energy_efficiency:
+            most_efficient = max(energy_efficiency.items(), key=lambda x: np.mean(x[1]) if x[1] else 0)[0]
+            least_efficient = min(energy_efficiency.items(), key=lambda x: np.mean(x[1]) if x[1] else float('inf'))[0]
+            
+            if most_efficient != least_efficient:
+                insights.append(
+                    f"{most_efficient.upper()} achieves {np.mean(energy_efficiency[most_efficient])/np.mean(energy_efficiency[least_efficient]):.1f}x "
+                    f"better energy efficiency (tokens/joule) than {least_efficient.upper()}"
+                )
+        
+        if total_energy:
+            lowest_energy = min(total_energy.items(), key=lambda x: np.mean(x[1]) if x[1] else float('inf'))[0]
+            highest_energy = max(total_energy.items(), key=lambda x: np.mean(x[1]) if x[1] else 0)[0]
+            
+            if lowest_energy != highest_energy:
+                insights.append(
+                    f"{lowest_energy.upper()} consumes {np.mean(total_energy[highest_energy])/np.mean(total_energy[lowest_energy]):.1f}x "
+                    f"less total energy than {highest_energy.upper()}, reducing operational costs"
+                )
+        
+        return insights
+    
+    def _generate_agent_insights(self, methods) -> List[str]:
+        """生成Agent相关的洞察"""
+        insights = []
+        
+        # 分析Agent计算模式
+        cpu_gpu_ratios = defaultdict(lambda: defaultdict(list))
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            for agent_name, steps in exp_data['agent_metrics'].items():
+                for step_idx, metrics in steps.items():
+                    for metric in metrics:
+                        compute = metric.get('compute', {})
+                        inference_time = compute.get('inference_time', 0)
+                        total_time = compute.get('total_time', inference_time + 0.1)
+                        
+                        gpu_ratio = inference_time / total_time if total_time > 0 else 0
+                        cpu_ratio = 1 - gpu_ratio
+                        
+                        cpu_gpu_ratios[method][agent_name].append((cpu_ratio, gpu_ratio))
+        
+        if cpu_gpu_ratios:
+            for method, agent_data in cpu_gpu_ratios.items():
+                for agent_name, ratios in agent_data.items():
+                    avg_cpu = np.mean([r[0] for r in ratios])
+                    avg_gpu = np.mean([r[1] for r in ratios])
+                    
+                    if avg_gpu > 0.7:
+                        insights.append(
+                            f"{agent_name} in {method.upper()} is GPU-bound ({avg_gpu:.1%} GPU time), "
+                            f"suggesting optimization opportunities for GPU utilization"
+                        )
+                    elif avg_cpu > 0.7:
+                        insights.append(
+                            f"{agent_name} in {method.upper()} is CPU-bound ({avg_cpu:.1%} CPU time), "
+                            f"indicating potential bottlenecks in data preprocessing or memory management"
+                        )
+        
+        return insights
+    
+    def generate_visualization_code(self):
+        """生成可视化代码示例"""
+        viz_code = f"""
+# Infrastructure Analysis Visualization Code
+# Generated on {datetime.now().isoformat()}
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from pathlib import Path
+
+# Set style
+plt.style.use('seaborn-v0_8')
+sns.set_palette("husl")
+
+# Load analysis data
+analysis_dir = Path('{self.output_dir}')
+report_path = analysis_dir / 'infrastructure_analysis_report.json'
+
+with open(report_path) as f:
+    report = json.load(f)
+
+# Example: Plot inference time comparison
+methods = {list(set(exp['method'] for exp in self.aggregated_data.values()))}
+inference_times = {{}}
+
+for exp_key, exp_data in {dict(self.aggregated_data)}.items():
+    method = exp_data['method']
+    if method in methods and 'compute' in exp_data['summary_stats']:
+        inference_times.setdefault(method, []).append(exp_data['summary_stats']['compute']['inference_time']['mean'])
+
+# Create plot
+fig, ax = plt.subplots(figsize=(10, 6))
+method_names = list(inference_times.keys())
+avg_times = [np.mean(inference_times[method]) for method in method_names]
+
+bars = ax.bar(method_names, avg_times, color=['#4ECDC4', '#FF6B6B', '#45B7D1'][:len(method_names)])
+ax.set_ylabel('Average Inference Time (seconds)')
+ax.set_title('Inference Time Comparison by Method')
+ax.grid(axis='y', alpha=0.3)
+
+# Add value labels
+for bar in bars:
+    height = bar.get_height()
+    ax.text(bar.get_x() + bar.get_width()/2, height + 0.1,
+            f'{{height:.3f}}s', ha='center', va='bottom')
+
+plt.tight_layout()
+plt.savefig(analysis_dir / 'inference_time_comparison.png', dpi=300)
+plt.show()
+"""
+        return viz_code
+
+def main():
+    """主函数"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Infrastructure Analysis for Multi-Agent Systems')
+    parser.add_argument('--metrics_dir', type=str, default='metrics',
+                       help='Directory containing metrics JSON files')
+    parser.add_argument('--output_dir', type=str, default='analysis_results',
+                       help='Directory to save analysis results')
+    parser.add_argument('--methods', type=str, nargs='+',
+                       help='Specific methods to analyze (e.g., latent_mas text_mas baseline)')
+    
+    args = parser.parse_args()
+    
+    print(f"🔍 Starting infrastructure analysis...")
+    print(f"📁 Metrics directory: {args.metrics_dir}")
+    print(f"📊 Output directory: {args.output_dir}")
+    
+    # 创建分析器
+    analyzer = InfrastructureAnalyzer(
+        metrics_dir=args.metrics_dir,
+        output_dir=args.output_dir
+    )
+    
+    # 获取要分析的方法
+    methods_to_analyze = args.methods if args.methods else None
+    
+    # 生成完整分析
+    analyzer.compare_methods(methods=methods_to_analyze)
+    
+    # 生成可视化代码示例
+    viz_code = analyzer.generate_visualization_code()
+    code_path = analyzer.output_dir / 'visualization_examples.py'
+    with open(code_path, 'w') as f:
+        f.write(viz_code)
+    print(f"✅ Visualization examples saved to: {code_path}")
+    
+    print(f"\n🎉 Analysis completed successfully!")
+    print(f"📈 Find all results in: {analyzer.output_dir}")
+
+if __name__ == "__main__":
+    main()
