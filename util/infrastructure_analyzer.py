@@ -1225,7 +1225,7 @@ class InfrastructureAnalyzer:
                     for metric in metrics:
                         power_metrics = metric.get('power', {})
                         total_energy += power_metrics['total_energy_consumed']
-                        total_tokens += power_metrics['total_energy_consumed'] * power_metrics['average_tokens_per_joule']
+                        total_tokens += power_metrics['total_energy_consumed'] * power_metrics['avg_tokens_per_joule']
                 agent_data[method][agent_name].append(total_tokens/total_energy if total_energy > 0 else 0)
         
         if not agent_data:
