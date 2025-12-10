@@ -1207,7 +1207,7 @@ class InfrastructureAnalyzer:
         ax.grid(axis='y', alpha=0.3)
 
         print(f"max_val: {max_val}")
-        ax.set_ylim(0, max(max_val) * 1.3)
+        ax.set_ylim(0, max_val * 1.3)
     
     def _plot_agent_efficiency(self, methods, ax):
         """绘制Agent效率分析（Tokens/Joule）"""
