@@ -1217,11 +1217,16 @@ class InfrastructureAnalyzer:
             method = exp_data['method']
             if method not in methods:
                 continue
-            
-            if 'power_summary' in exp_data and exp_data['power_summary']:
-                tokens_per_joule = exp_data['power_summary'].get('avg_tokens_per_joule', 0)
-                for agent_name in exp_data['agent_metrics'].keys():
-                    agent_data[method][agent_name].append(tokens_per_joule)
+
+            for agent_name, steps in exp_data['agent_metrics'].items():
+                total_energy = 0.0
+                total_tokens = 0.0
+                for step_idx, metrics in steps.items():
+                    for metric in metrics:
+                        power_metrics = metric.get('power', {})
+                        total_energy += power_metrics['total_energy_consumed']
+                        total_tokens += power_metrics['total_energy_consumed'] * power_metrics['average_tokens_per_joule']
+                agent_data[method][agent_name].append(total_tokens/total_energy if total_energy > 0 else 0)
         
         if not agent_data:
             ax.text(0.5, 0.5, 'No agent efficiency data available', ha='center', va='center')
@@ -1234,7 +1239,7 @@ class InfrastructureAnalyzer:
         
         x = np.arange(len(agent_names))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             efficiency_means = []
             
@@ -1243,6 +1248,7 @@ class InfrastructureAnalyzer:
                     efficiency_means.append(np.mean(agent_data[method][agent]))
                 else:
                     efficiency_means.append(0)
+            max_val = max(max_val, max(efficiency_means))
             
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, efficiency_means, width,
@@ -1264,7 +1270,6 @@ class InfrastructureAnalyzer:
         ax.set_xticklabels(agent_names, rotation=45, ha='right')
         ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.0))
         ax.grid(axis='y', alpha=0.3)
-        max_val = max(max(efficiency_means) for efficiency_means in agent_data.values()) if agent_data else 100
         ax.set_ylim(0, max_val * 1.3)
     
     def _get_method_color(self, method: str) -> str:
