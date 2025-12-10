@@ -480,7 +480,7 @@ class InfrastructureAnalyzer:
             if 'compute' in exp_data['summary_stats']:
                 stats = exp_data['summary_stats']['compute']
                 if 'flops_estimate' in stats:
-                    data_by_method[method][task].append(stats['flops_estimate']['mean'])
+                    data_by_method[method][task].append(stats['flops_estimate']['mean'].value)
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No FLOPS efficiency data available', ha='center', va='center')
