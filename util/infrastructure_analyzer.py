@@ -1146,42 +1146,44 @@ class InfrastructureAnalyzer:
     
     def _plot_agent_power_consumption(self, methods, ax):
         """绘制Agent功耗分析"""
-        agent_data = defaultdict(lambda: defaultdict(list))
+        agent_energy = defaultdict(lambda: defaultdict(list))
         
         for exp_key, exp_data in self.aggregated_data.items():
             method = exp_data['method']
             if method not in methods:
                 continue
-            
-            if 'power_summary' in exp_data and exp_data['power_summary']:
-                # 这里需要更细粒度的Agent功耗数据
-                # 临时使用整体功耗数据作为替代
-                total_energy = exp_data['power_summary']['total_energy_consumed']
-                agent_count = len(exp_data['agent_metrics'])
-                
-                for agent_name in exp_data['agent_metrics'].keys():
-                    agent_data[method][agent_name].append(total_energy / agent_count if agent_count > 0 else 0)
+
+            for agent_name, steps in exp_data['agent_metrics'].items():
+                for step_idx, metrics in steps.items():
+                    for metric in metrics:
+                        power_metrics = metric.get('power', {})
+                        agent_energy[method][agent_name].append(power_metrics['total_energy_consumed'])
         
-        if not agent_data:
+        if not agent_energy:
+            print(f"Warning: agent energy data cannot be obtained!")
             ax.text(0.5, 0.5, 'No agent power data available', ha='center', va='center')
             return
+
+        print(f"agent_energy: {agent_energy}")
         
         # 准备数据
-        method_names = list(agent_data.keys())
-        agent_names = sorted(set(agent for method_data in agent_data.values() 
+        method_names = list(agent_energy.keys())
+        agent_names = sorted(set(agent for method_data in agent_energy.values() 
                                for agent in method_data.keys()))
         
         x = np.arange(len(agent_names))
         width = 0.8 / len(method_names)
         
+        max_val = 0
         for i, method in enumerate(method_names):
             energy_means = []
             
             for agent in agent_names:
-                if agent in agent_data[method]:
-                    energy_means.append(np.mean(agent_data[method][agent]))
+                if agent in agent_energy[method]:
+                    energy_means.append(np.mean(agent_energy[method][agent]))
                 else:
                     energy_means.append(0)
+            max_val = max(max_val, max(energy_means))
             
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, energy_means, width,
@@ -1204,7 +1206,6 @@ class InfrastructureAnalyzer:
         ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.0))
         ax.grid(axis='y', alpha=0.3)
 
-        max_val = max(max(energy_means) for energy_means in agent_data.values()) if agent_data else 100
         print(f"max_val: {max_val}")
         ax.set_ylim(0, max(max_val) * 1.3)
     
