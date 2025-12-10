@@ -519,7 +519,7 @@ class InfrastructureAnalyzer:
         ax.set_xticklabels(tasks, rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        print(f"data_by_method: {data_by_method['latent_mas']} and {data_by_method['text_mas']}")
+        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
         ax.set_ylim(0, max(max(flops for flops in data_by_method[method].values()) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _generate_memory_analysis(self, methods):
