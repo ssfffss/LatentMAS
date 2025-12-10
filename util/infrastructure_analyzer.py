@@ -87,20 +87,7 @@ class InfrastructureAnalyzer:
         print(f"✅ Aggregated into {len(self.aggregated_data)} unique experiments")
     
     def _extract_experiment_key(self, experiment_name: str, method: str) -> str:
-        """
-        从实验名称中提取基础实验键，忽略batch和时间戳信息
-        格式: {method}_{model}_{task}_{batch_size} -> {method}_{model}_{task}
-        """
-        # 移除时间戳部分 (最后的数字)
-        base_name = re.sub(r'_[0-9]+$', '', experiment_name)
-        
-        # 尝试解析标准格式
-        parts = base_name.split('_')
-        if len(parts) >= 3:
-            # 格式: method_model_task_batchsize
-            return f"{method}_{parts[1]}_{parts[2]}"
-        
-        return base_name
+        return experiment_name
     
     def _load_all_metrics(self) -> Dict[str, List]:
         """加载所有指标数据，包括功耗数据"""
@@ -155,11 +142,12 @@ class InfrastructureAnalyzer:
                 exp_key = self._extract_experiment_key(exp['experiment_name'], method)
                 experiment_groups[exp_key].append(exp)
         
-        print(f"📊 Found {len(experiment_groups)} experiment groups to aggregate")
+        print(f"📊 Found {len(experiment_groups)} experiment groups: {experiment_groups.keys()} keys to aggregate")
         
         for exp_key, experiments in experiment_groups.items():
             if not experiments:
                 continue
+            print(f"exp_key: {exp_key}, num_experiments: {len(experiments)}")
             
             # 基础元数据（取第一个实验的）
             base_exp = experiments[0]
@@ -193,7 +181,7 @@ class InfrastructureAnalyzer:
                         aggregated_agents[agent_name][step_idx].extend(step_metrics)
                 
                 # 累计统计信息
-                total_samples += len(experiments)  # 简化处理，实际应从数据中获取
+                total_samples += exp['agent_metrics']['Planner']['step_0'][0]['batch_size']  
                 total_duration += exp.get('duration', 0)
                 
                 # 估计token数量
@@ -221,7 +209,7 @@ class InfrastructureAnalyzer:
                 'experiment_key': exp_key,
                 'method': method,
                 'model': base_exp.get('model', 'unknown'),
-                'task': exp_key.split('_')[2] if len(exp_key.split('_')) > 2 else 'unknown',
+                'task': exp_key.split('_')[3] if len(exp_key.split('_')) > 3 else 'unknown',
                 'batch_count': len(experiments),
                 'total_samples': total_samples,
                 'total_duration': total_duration,
@@ -531,6 +519,7 @@ class InfrastructureAnalyzer:
         ax.set_xticklabels(tasks, rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
+        print(f"data_by_method: {data_by_method}")
         ax.set_ylim(0, max(max(flops for flops in data_by_method[method].values()) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _generate_memory_analysis(self, methods):
