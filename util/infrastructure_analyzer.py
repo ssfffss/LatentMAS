@@ -107,8 +107,8 @@ class InfrastructureAnalyzer:
                     if 'gsm8k' in experiment_name:
                         for agent_name, steps in data['agent_metrics'].items():
                             for step_idx, metrics in steps.items():
-                                for i in len(metrics):
-                                    data['agent_metrics'][agent_name][step_idx][i]['compute'] = data['agent_metrics'][agent_name][step_idx][i]['compute'] * 8
+                                for i in range(len(metrics)):
+                                    data['agent_metrics'][agent_name][step_idx][i]['compute']['gpu_util'] = data['agent_metrics'][agent_name][step_idx][i]['compute']['gpu_util'] * 8
                                     # compute = metric.get('compute', {})
                                     # compute['gpu_util'] = compute['gpu_util'] * 8
                     
@@ -366,23 +366,19 @@ class InfrastructureAnalyzer:
             ax.text(0.5, 0.5, 'No inference time data available', ha='center', va='center')
             return
         
-        if not data_by_method:
-            ax.text(0.5, 0.5, 'No GPU utilization data available', ha='center', va='center')
-            return
-        
         # 准备数据
         method_names = list(data_by_method.keys())
         tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
         
         x = np.arange(len(tasks))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             avg_flops = []
             for task in tasks:
                 values = data_by_method[method].get(task, [])
                 avg_flops.append(np.mean(values) if values else 0)
-            
+            max_val = max(max_val, max(avg_flops))
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, avg_flops, width, 
                          label=method.upper(),
@@ -393,7 +389,7 @@ class InfrastructureAnalyzer:
             for j, bar in enumerate(bars):
                 height = bar.get_height()
                 if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                    ax.text(bar.get_x() + bar.get_width()/2, height / 2,
                            f'{height:.1f}', 
                            ha='center', va='bottom', fontsize=8)
         
@@ -403,7 +399,7 @@ class InfrastructureAnalyzer:
         ax.set_xticklabels(tasks, rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+        ax.set_ylim(0, max_val * 1.3)
     
     def _plot_gpu_utilization_comparison(self, methods, ax):
         """绘制GPU利用率对比"""
@@ -622,13 +618,13 @@ class InfrastructureAnalyzer:
         
         x = np.arange(len(tasks))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             avg_flops = []
             for task in tasks:
                 values = data_by_method[method].get(task, [])
                 avg_flops.append(np.mean(values) if values else 0)
-            
+            max_val = max(max_val, max(avg_flops))
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, avg_flops, width, 
                          label=method.upper(),
@@ -639,7 +635,7 @@ class InfrastructureAnalyzer:
             for j, bar in enumerate(bars):
                 height = bar.get_height()
                 if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                    ax.text(bar.get_x() + bar.get_width()/2, height / 2,
                            f'{height:.1f}', 
                            ha='center', va='bottom', fontsize=8)
         
@@ -650,7 +646,7 @@ class InfrastructureAnalyzer:
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
-        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+        ax.set_ylim(0, max_val * 1.3)
     
     def _plot_ram_usage_comparison(self, methods, ax):
         """绘制RAM使用对比"""
@@ -677,13 +673,14 @@ class InfrastructureAnalyzer:
         
         x = np.arange(len(tasks))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             avg_flops = []
             for task in tasks:
                 values = data_by_method[method].get(task, [])
                 avg_flops.append(np.mean(values) if values else 0)
-            
+            max_val = max(max_val, max(avg_flops))
+
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, avg_flops, width, 
                          label=method.upper(),
@@ -694,7 +691,7 @@ class InfrastructureAnalyzer:
             for j, bar in enumerate(bars):
                 height = bar.get_height()
                 if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                    ax.text(bar.get_x() + bar.get_width()/2, height /2,
                            f'{height:.1f}', 
                            ha='center', va='bottom', fontsize=8)
         
@@ -705,7 +702,7 @@ class InfrastructureAnalyzer:
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
-        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+        ax.set_ylim(0, max_val * 1.3)
     
     def _plot_network_comparison(self, methods, ax):
         """绘制网络通信对比"""
@@ -732,13 +729,13 @@ class InfrastructureAnalyzer:
         
         x = np.arange(len(tasks))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             avg_comm_data = []
             for task in tasks:
                 values = data_by_method[method].get(task, [])
                 avg_comm_data.append(np.mean(values) if values else 0)
-            
+            max_val = max(max_val, max(avg_comm_data))
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, avg_comm_data, width, 
                          label=method.upper(),
@@ -749,7 +746,7 @@ class InfrastructureAnalyzer:
             for j, bar in enumerate(bars):
                 height = bar.get_height()
                 if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                    ax.text(bar.get_x() + bar.get_width()/2, height / 2,
                            f'{height:.1f}', 
                            ha='center', va='bottom', fontsize=8)
         
@@ -759,7 +756,7 @@ class InfrastructureAnalyzer:
         ax.set_xticklabels(tasks, rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+        ax.set_ylim(0, max_val * 1.3)
     
     def _plot_kv_cache_comparison(self, methods, ax):
         """绘制KV缓存大小对比"""
@@ -785,13 +782,13 @@ class InfrastructureAnalyzer:
         
         x = np.arange(len(tasks))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             avg_flops = []
             for task in tasks:
                 values = data_by_method[method].get(task, [])
                 avg_flops.append(np.mean(values) if values else 0)
-            
+            max_val = max(max_val, max(avg_flops))
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, avg_flops, width, 
                          label=method.upper(),
@@ -802,7 +799,7 @@ class InfrastructureAnalyzer:
             for j, bar in enumerate(bars):
                 height = bar.get_height()
                 if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                    ax.text(bar.get_x() + bar.get_width()/2, height / 2,
                            f'{height:.1f}', 
                            ha='center', va='bottom', fontsize=8)
         
@@ -812,8 +809,7 @@ class InfrastructureAnalyzer:
         ax.set_xticklabels(tasks, rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
-        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+        ax.set_ylim(0, max_val * 1.3)
 
     def _plot_cpu_memory_comparison(self, methods, ax):
         """绘制内存效率对比（VRAM + RAM）"""
@@ -839,13 +835,13 @@ class InfrastructureAnalyzer:
         
         x = np.arange(len(tasks))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             avg_flops = []
             for task in tasks:
                 values = data_by_method[method].get(task, [])
                 avg_flops.append(np.mean(values) if values else 0)
-            
+            max_val = max(max_val, max(avg_flops))
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, avg_flops, width, 
                          label=method.upper(),
@@ -856,7 +852,7 @@ class InfrastructureAnalyzer:
             for j, bar in enumerate(bars):
                 height = bar.get_height()
                 if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                    ax.text(bar.get_x() + bar.get_width()/2, height / 2,
                            f'{height:.1f}', 
                            ha='center', va='bottom', fontsize=8)
         
@@ -866,8 +862,7 @@ class InfrastructureAnalyzer:
         ax.set_xticklabels(tasks, rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
-        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+        ax.set_ylim(0, max_val * 1.3)
     
     def _plot_gpu_memory_comparison(self, methods, ax):
         """绘制内存效率对比（VRAM + RAM）"""
@@ -879,10 +874,10 @@ class InfrastructureAnalyzer:
                 continue
             
             task = exp_data['task']
-            if 'memory' in exp_data['summary_stats']:
-                stats = exp_data['summary_stats']['memory']
-                if 'vram_allocated' in stats:
-                    data_by_method[method][task].append(stats['vram_allocated']['mean'])
+            if 'compute' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['compute']
+                if 'avg_gpu_mem_used' in stats:
+                    data_by_method[method][task].append(stats['avg_gpu_mem_used']['mean'])
 
         
         if not data_by_method:
@@ -894,13 +889,13 @@ class InfrastructureAnalyzer:
         
         x = np.arange(len(tasks))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             avg_flops = []
             for task in tasks:
                 values = data_by_method[method].get(task, [])
                 avg_flops.append(np.mean(values) if values else 0)
-            
+            max_val = max(max_val, max(avg_flops))
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, avg_flops, width, 
                          label=method.upper(),
@@ -911,17 +906,16 @@ class InfrastructureAnalyzer:
             for j, bar in enumerate(bars):
                 height = bar.get_height()
                 if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                    ax.text(bar.get_x() + bar.get_width()/2, height / 2,
                            f'{height:.1f}', 
                            ha='center', va='bottom', fontsize=8)
         
         ax.set_ylabel('GPU Memory Usage (GB)', fontweight='bold')
-        ax.set_title('Memory Efficiency: GPU VRAM', fontsize=14, fontweight='bold')
+        ax.set_title('Memory Efficiency: GPU RAM', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels(tasks, rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
         ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _generate_power_analysis(self, methods):
@@ -976,13 +970,13 @@ class InfrastructureAnalyzer:
         
         x = np.arange(len(tasks))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             avg_flops = []
             for task in tasks:
                 values = data_by_method[method].get(task, [])
                 avg_flops.append(np.mean(values) if values else 0)
-            
+            max_val = max(max_val, max(avg_flops))
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, avg_flops, width, 
                          label=method.upper(),
@@ -993,7 +987,7 @@ class InfrastructureAnalyzer:
             for j, bar in enumerate(bars):
                 height = bar.get_height()
                 if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                    ax.text(bar.get_x() + bar.get_width()/2, height / 2,
                            f'{height:.1f}', 
                            ha='center', va='bottom', fontsize=8)
         
@@ -1004,7 +998,7 @@ class InfrastructureAnalyzer:
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
-        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+        ax.set_ylim(0, max(avg_flops) * 1.3)
     
     def _plot_power_efficiency(self, methods, ax):
         """绘制能效对比（Tokens/Joule）"""
@@ -1031,13 +1025,13 @@ class InfrastructureAnalyzer:
         
         x = np.arange(len(tasks))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             avg_flops = []
             for task in tasks:
                 values = data_by_method[method].get(task, [])
                 avg_flops.append(np.mean(values) if values else 0)
-            
+            max_val = max(max_val, max(avg_flops))
             offset = i * width - (len(method_names) - 1) * width / 2
             bars = ax.bar(x + offset, avg_flops, width, 
                          label=method.upper(),
@@ -1048,7 +1042,7 @@ class InfrastructureAnalyzer:
             for j, bar in enumerate(bars):
                 height = bar.get_height()
                 if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                    ax.text(bar.get_x() + bar.get_width()/2, height / 2,
                            f'{height:.1f}', 
                            ha='center', va='bottom', fontsize=8)
         
@@ -1059,7 +1053,7 @@ class InfrastructureAnalyzer:
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
         print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
-        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+        ax.set_ylim(0, max_val * 1.3)
     
     def _plot_energy_breakdown(self, methods, ax):
         """绘制能耗分解（GPU/CPU/DRAM）"""
@@ -1072,9 +1066,9 @@ class InfrastructureAnalyzer:
             task = exp_data['task']
             if 'power_summary' in exp_data and exp_data['power_summary']:
                 summary = exp_data['power_summary']
-                data_by_method[method][task]['gpu'].append(summary['gpu_energy_fraction'])
-                data_by_method[method][task]['cpu'].append(summary['cpu_energy_fraction'])
-                data_by_method[method][task]['dram'].append(summary['dram_energy_fraction'])
+                data_by_method[method][task]['gpu'].append(summary['gpu_energy_fraction'] * summary['total_energy_consumed'])
+                data_by_method[method][task]['cpu'].append(summary['cpu_energy_fraction'] * summary['total_energy_consumed'])
+                data_by_method[method][task]['dram'].append(summary['dram_energy_fraction'] * summary['total_energy_consumed'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No energy breakdown data available', ha='center', va='center')
@@ -1124,7 +1118,6 @@ class InfrastructureAnalyzer:
         ax.set_xticklabels(tasks, rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
         ax.set_ylim(0, max_val * 1.3)
     
     def _plot_cost_analysis(self, methods, ax):
