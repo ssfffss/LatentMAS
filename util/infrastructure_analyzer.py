@@ -349,61 +349,22 @@ class InfrastructureAnalyzer:
     
     def _plot_inference_time_comparison(self, methods, ax):
         """绘制推理时间对比"""
-        data_by_method = defaultdict(list)
+        data_by_method = defaultdict(lambda: defaultdict(list))
         
         for exp_key, exp_data in self.aggregated_data.items():
             method = exp_data['method']
             if method not in methods:
                 continue
             
+            task = exp_data['task']
             if 'compute' in exp_data['summary_stats']:
                 stats = exp_data['summary_stats']['compute']
                 if 'inference_time' in stats:
-                    data_by_method[method].append(stats['inference_time']['mean'])
+                    data_by_method[method][task].append(stats['inference_time']['mean'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No inference time data available', ha='center', va='center')
             return
-        
-        # 准备数据
-        method_names = list(data_by_method.keys())
-        avg_times = [np.mean(data_by_method[method]) for method in method_names]
-        std_times = [np.std(data_by_method[method]) for method in method_names]
-        
-        x = np.arange(len(method_names))
-        width = 0.6
-        
-        bars = ax.bar(x, avg_times, width, yerr=std_times, capsize=5, 
-                     color=[self._get_method_color(method) for method in method_names],
-                     alpha=0.8, edgecolor='white')
-        
-        # 添加数据标签
-        for i, bar in enumerate(bars):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2, height + 0.05,
-                   f'{avg_times[i]:.3f}s\n±{std_times[i]:.3f}', 
-                   ha='center', va='bottom', fontweight='bold', fontsize=9)
-        
-        ax.set_ylabel('Average Inference Time (seconds)', fontweight='bold')
-        ax.set_title('Inference Time Comparison', fontsize=14, fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
-        ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(0, max(avg_times) * 1.3 if avg_times else 1)
-    
-    def _plot_gpu_utilization_comparison(self, methods, ax):
-        """绘制GPU利用率对比"""
-        data_by_method = defaultdict(list)
-        
-        for exp_key, exp_data in self.aggregated_data.items():
-            method = exp_data['method']
-            if method not in methods:
-                continue
-            
-            if 'compute' in exp_data['summary_stats']:
-                stats = exp_data['summary_stats']['compute']
-                if 'gpu_util' in stats:
-                    data_by_method[method].append(stats['gpu_util']['mean'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No GPU utilization data available', ha='center', va='center')
@@ -411,30 +372,93 @@ class InfrastructureAnalyzer:
         
         # 准备数据
         method_names = list(data_by_method.keys())
-        avg_utils = [np.mean(data_by_method[method]) for method in method_names]
-        std_utils = [np.std(data_by_method[method]) for method in method_names]
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
         
-        # 创建水平条形图
-        y = np.arange(len(method_names))
-        height = 0.5
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
         
-        bars = ax.barh(y, avg_utils, height, xerr=std_utils, capsize=5,
-                      color=[self._get_method_color(method) for method in method_names],
-                      alpha=0.8, edgecolor='white')
+        for i, method in enumerate(method_names):
+            avg_flops = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_flops.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_flops, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
         
-        # 添加数据标签
-        for i, bar in enumerate(bars):
-            width = bar.get_width()
-            ax.text(width + 2, bar.get_y() + bar.get_height()/2,
-                   f'{avg_utils[i]:.1f}%\n±{std_utils[i]:.1f}', 
-                   ha='left', va='center', fontweight='bold', fontsize=9)
+        ax.set_ylabel('Average Inference Time (seconds)', fontweight='bold')
+        ax.set_title('Inference Time Comparison', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+    
+    def _plot_gpu_utilization_comparison(self, methods, ax):
+        """绘制GPU利用率对比"""
+        data_by_method = defaultdict(lambda: defaultdict(list))
         
-        ax.set_xlabel('Average GPU Utilization (%)', fontweight='bold')
-        ax.set_title('GPU Utilization Comparison', fontsize=14, fontweight='bold')
-        ax.set_yticks(y)
-        ax.set_yticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
-        ax.grid(axis='x', alpha=0.3)
-        ax.set_xlim(0, max(avg_utils) * 1.3 if avg_utils else 100)
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            task = exp_data['task']
+            if 'compute' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['compute']
+                if 'gpu_util' in stats:
+                    data_by_method[method][task].append(stats['gpu_util']['mean'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No GPU utilization data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
+        
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
+        
+        for i, method in enumerate(method_names):
+            avg_flops = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_flops.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_flops, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
+        
+        ax.set_ylabel('Average GPU Usage (%)', fontweight='bold')
+        ax.set_title('GPU Utilization by Task', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _plot_tokens_per_second_comparison(self, methods, ax):
         """绘制Tokens/秒对比"""
@@ -539,7 +563,7 @@ class InfrastructureAnalyzer:
         """生成内存负载分析图表"""
         print("\n📦 Generating memory analysis...")
         
-        for i in range(4):
+        for i in range(5):
             fig, axes = plt.subplots(figsize=(8, 6))
             if i == 0:
                 self._plot_vram_usage_comparison(methods, axes)
@@ -548,7 +572,9 @@ class InfrastructureAnalyzer:
             elif i == 2:
                 self._plot_kv_cache_comparison(methods, axes)
             elif i == 3:
-                self._plot_memory_efficiency_comparison(methods, axes)
+                self._plot_cpu_memory_comparison(methods, axes)
+            elif i == 4:
+                self._plot_gpu_memory_comparison(methods, axes)
         
             plt.tight_layout()
             output_path = self.output_dir / f'memory_infrastructure_analysis_{i}.png'
@@ -558,7 +584,7 @@ class InfrastructureAnalyzer:
     
     def _generate_network_analysis(self, methods):
         """生成网络负载分析图表"""
-        print("\n📦 Generating netwqrk analysis...")
+        print("\n📦 Generating network analysis...")
         
         for i in range(1):
             fig, axes = plt.subplots(figsize=(8, 6))
@@ -573,17 +599,18 @@ class InfrastructureAnalyzer:
 
     def _plot_vram_usage_comparison(self, methods, ax):
         """绘制VRAM使用对比"""
-        data_by_method = defaultdict(list)
+        data_by_method = defaultdict(lambda: defaultdict(list))
         
         for exp_key, exp_data in self.aggregated_data.items():
             method = exp_data['method']
             if method not in methods:
                 continue
             
+            task = exp_data['task']
             if 'memory' in exp_data['summary_stats']:
                 stats = exp_data['summary_stats']['memory']
                 if 'vram_allocated' in stats:
-                    data_by_method[method].append(stats['vram_allocated']['mean'])
+                    data_by_method[method][task].append(stats['vram_allocated']['mean'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No VRAM usage data available', ha='center', va='center')
@@ -591,43 +618,54 @@ class InfrastructureAnalyzer:
         
         # 准备数据
         method_names = list(data_by_method.keys())
-        avg_vram = [np.mean(data_by_method[method]) for method in method_names]
-        std_vram = [np.std(data_by_method[method]) for method in method_names]
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
         
-        x = np.arange(len(method_names))
-        width = 0.6
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
         
-        bars = ax.bar(x, avg_vram, width, yerr=std_vram, capsize=5,
-                     color=[self._get_method_color(method) for method in method_names],
-                     alpha=0.8, edgecolor='white')
-        
-        # 添加数据标签
-        for i, bar in enumerate(bars):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2, height + 0.5,
-                   f'{avg_vram[i]:.2f}GB\n±{std_vram[i]:.2f}', 
-                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        for i, method in enumerate(method_names):
+            avg_flops = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_flops.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_flops, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
         
         ax.set_ylabel('Average VRAM Usage (GB)', fontweight='bold')
         ax.set_title('VRAM Usage Comparison', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
-        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
+        ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(0, max(avg_vram) * 1.3 if avg_vram else 24)
+        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _plot_ram_usage_comparison(self, methods, ax):
         """绘制RAM使用对比"""
-        data_by_method = defaultdict(list)
+        data_by_method = defaultdict(lambda: defaultdict(list))
         
         for exp_key, exp_data in self.aggregated_data.items():
             method = exp_data['method']
             if method not in methods:
                 continue
             
+            task = exp_data['task']
             if 'memory' in exp_data['summary_stats']:
                 stats = exp_data['summary_stats']['memory']
                 if 'ram_used' in stats:
-                    data_by_method[method].append(stats['ram_used']['mean'])
+                    data_by_method[method][task].append(stats['ram_used']['mean'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No RAM usage data available', ha='center', va='center')
@@ -635,29 +673,39 @@ class InfrastructureAnalyzer:
         
         # 准备数据
         method_names = list(data_by_method.keys())
-        avg_ram = [np.mean(data_by_method[method]) for method in method_names]
-        std_ram = [np.std(data_by_method[method]) for method in method_names]
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
         
-        x = np.arange(len(method_names))
-        width = 0.6
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
         
-        bars = ax.bar(x, avg_ram, width, yerr=std_ram, capsize=5,
-                     color=[self._get_method_color(method) for method in method_names],
-                     alpha=0.8, edgecolor='white')
-        
-        # 添加数据标签
-        for i, bar in enumerate(bars):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2, height + 0.5,
-                   f'{avg_ram[i]:.2f}GB\n±{std_ram[i]:.2f}', 
-                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        for i, method in enumerate(method_names):
+            avg_flops = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_flops.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_flops, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
         
         ax.set_ylabel('Average RAM Usage (GB)', fontweight='bold')
         ax.set_title('System RAM Usage Comparison', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
-        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
+        ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(0, max(avg_ram) * 1.3 if avg_ram else 64)
+        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _plot_network_comparison(self, methods, ax):
         """绘制网络通信对比"""
@@ -715,100 +763,166 @@ class InfrastructureAnalyzer:
     
     def _plot_kv_cache_comparison(self, methods, ax):
         """绘制KV缓存大小对比"""
-        data_by_method = defaultdict(list)
+        data_by_method = defaultdict(lambda: defaultdict(list))
         
         for exp_key, exp_data in self.aggregated_data.items():
             method = exp_data['method']
             if method not in methods:
                 continue
             
+            task = exp_data['task']
             if 'memory' in exp_data['summary_stats']:
                 stats = exp_data['summary_stats']['memory']
                 if 'kv_cache_size' in stats:
-                    data_by_method[method].append(stats['kv_cache_size']['mean'])
+                    data_by_method[method][task].append(stats['kv_cache_size']['mean'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No KV cache data available', ha='center', va='center')
             return
         
-        # 准备数据
         method_names = list(data_by_method.keys())
-        avg_kv = [np.mean(data_by_method[method]) for method in method_names]
-        std_kv = [np.std(data_by_method[method]) for method in method_names]
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
         
-        x = np.arange(len(method_names))
-        width = 0.6
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
         
-        bars = ax.bar(x, avg_kv, width, yerr=std_kv, capsize=5,
-                     color=[self._get_method_color(method) for method in method_names],
-                     alpha=0.8, edgecolor='white')
-        
-        # 添加数据标签
-        for i, bar in enumerate(bars):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2, height + 0.1,
-                   f'{avg_kv[i]:.2f}GB\n±{std_kv[i]:.2f}', 
-                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        for i, method in enumerate(method_names):
+            avg_flops = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_flops.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_flops, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
         
         ax.set_ylabel('Average KV Cache Size (GB)', fontweight='bold')
         ax.set_title('KV Cache Size Comparison', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
-        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
+        ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(0, max(avg_kv) * 1.3 if avg_kv else 10)
-    
-    def _plot_memory_efficiency_comparison(self, methods, ax):
+        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+
+    def _plot_cpu_memory_comparison(self, methods, ax):
         """绘制内存效率对比（VRAM + RAM）"""
-        data_by_method = defaultdict(lambda: {'vram': [], 'ram': []})
+        data_by_method = defaultdict(lambda: defaultdict(list))
         
         for exp_key, exp_data in self.aggregated_data.items():
             method = exp_data['method']
             if method not in methods:
                 continue
             
+            task = exp_data['task']
             if 'memory' in exp_data['summary_stats']:
                 stats = exp_data['summary_stats']['memory']
-                if 'vram_allocated' in stats:
-                    data_by_method[method]['vram'].append(stats['vram_allocated']['mean'])
                 if 'ram_used' in stats:
-                    data_by_method[method]['ram'].append(stats['ram_used']['mean'])
+                    data_by_method[method][task].append(stats['ram_used']['mean'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No memory efficiency data available', ha='center', va='center')
             return
         
-        # 准备数据
         method_names = list(data_by_method.keys())
-        x = np.arange(len(method_names))
-        width = 0.4
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
         
-        # VRAM部分
-        vram_means = [np.mean(data_by_method[method]['vram']) for method in method_names]
-        ax.bar(x - width/2, vram_means, width, label='VRAM Usage',
-               color=[self._get_method_color(method) for method in method_names],
-               alpha=0.8, edgecolor='white')
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
         
-        # RAM部分
-        ram_means = [np.mean(data_by_method[method]['ram']) for method in method_names]
-        ax.bar(x + width/2, ram_means, width, label='RAM Usage',
-               color=[self._get_method_color(method) for method in method_names],
-               alpha=0.8, hatch='//', edgecolor='white')
+        for i, method in enumerate(method_names):
+            avg_flops = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_flops.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_flops, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
         
-        # 添加数据标签
-        for i, (vram, ram) in enumerate(zip(vram_means, ram_means)):
-            ax.text(x[i] - width/2, vram + 0.5, f'{vram:.2f}GB', 
-                   ha='center', va='bottom', fontsize=8, rotation=45)
-            ax.text(x[i] + width/2, ram + 0.5, f'{ram:.2f}GB', 
-                   ha='center', va='bottom', fontsize=8, rotation=45)
-        
-        ax.set_ylabel('Memory Usage (GB)', fontweight='bold')
-        ax.set_title('Memory Efficiency: VRAM vs RAM', fontsize=14, fontweight='bold')
+        ax.set_ylabel('CPU Memory Usage (GB)', fontweight='bold')
+        ax.set_title('Memory Efficiency: RAM', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
-        ax.set_xticklabels([method.upper() for method in method_names])
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        max_val = max(max(vram_means), max(ram_means)) if vram_means and ram_means else 10
-        ax.set_ylim(0, max_val * 1.3)
+        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
+    
+    def _plot_gpu_memory_comparison(self, methods, ax):
+        """绘制内存效率对比（VRAM + RAM）"""
+        data_by_method = defaultdict(lambda: defaultdict(list))
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            task = exp_data['task']
+            if 'memory' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['memory']
+                if 'vram_allocated' in stats:
+                    data_by_method[method][task].append(stats['vram_allocated']['mean'])
+
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No memory efficiency data available', ha='center', va='center')
+            return
+        
+        method_names = list(data_by_method.keys())
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
+        
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
+        
+        for i, method in enumerate(method_names):
+            avg_flops = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_flops.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_flops, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
+        
+        ax.set_ylabel('GPU Memory Usage (GB)', fontweight='bold')
+        ax.set_title('Memory Efficiency: GPU VRAM', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _generate_power_analysis(self, methods):
         """生成功耗分析图表"""
@@ -840,16 +954,17 @@ class InfrastructureAnalyzer:
     
     def _plot_energy_consumption(self, methods, ax):
         """绘制能耗对比"""
-        data_by_method = defaultdict(list)
+        data_by_method = defaultdict(lambda: defaultdict(list))
         
         for exp_key, exp_data in self.aggregated_data.items():
             method = exp_data['method']
             if method not in methods:
                 continue
             
+            task = exp_data['task']
             if 'power_summary' in exp_data and exp_data['power_summary']:
                 summary = exp_data['power_summary']
-                data_by_method[method].append(summary['total_energy_consumed'])
+                data_by_method[method][task].append(summary['total_energy_consumed'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No energy consumption data available', ha='center', va='center')
@@ -857,43 +972,54 @@ class InfrastructureAnalyzer:
         
         # 准备数据
         method_names = list(data_by_method.keys())
-        avg_energy = [np.mean(data_by_method[method]) for method in method_names]
-        std_energy = [np.std(data_by_method[method]) for method in method_names]
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
         
-        x = np.arange(len(method_names))
-        width = 0.6
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
         
-        bars = ax.bar(x, avg_energy, width, yerr=std_energy, capsize=5,
-                     color=[self._get_method_color(method) for method in method_names],
-                     alpha=0.8, edgecolor='white')
-        
-        # 添加数据标签
-        for i, bar in enumerate(bars):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2, height + 1,
-                   f'{avg_energy[i]:.2f}J\n±{std_energy[i]:.2f}', 
-                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        for i, method in enumerate(method_names):
+            avg_flops = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_flops.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_flops, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
         
         ax.set_ylabel('Total Energy Consumed (Joules)', fontweight='bold')
         ax.set_title('Energy Consumption per Experiment', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
-        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
+        ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(0, max(avg_energy) * 1.3 if avg_energy else 100)
+        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _plot_power_efficiency(self, methods, ax):
         """绘制能效对比（Tokens/Joule）"""
-        data_by_method = defaultdict(list)
+        data_by_method = defaultdict(lambda: defaultdict(list))
         
         for exp_key, exp_data in self.aggregated_data.items():
             method = exp_data['method']
             if method not in methods:
                 continue
             
+            task = exp_data['task']
             if 'power_summary' in exp_data and exp_data['power_summary']:
                 summary = exp_data['power_summary']
                 if 'avg_tokens_per_joule' in summary:
-                    data_by_method[method].append(summary['avg_tokens_per_joule'])
+                    data_by_method[method][task].append(summary['avg_tokens_per_joule'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No power efficiency data available', ha='center', va='center')
@@ -901,44 +1027,54 @@ class InfrastructureAnalyzer:
         
         # 准备数据
         method_names = list(data_by_method.keys())
-        avg_efficiency = [np.mean(data_by_method[method]) for method in method_names]
-        std_efficiency = [np.std(data_by_method[method]) for method in method_names]
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
         
-        x = np.arange(len(method_names))
-        width = 0.6
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
         
-        bars = ax.bar(x, avg_efficiency, width, yerr=std_efficiency, capsize=5,
-                     color=[self._get_method_color(method) for method in method_names],
-                     alpha=0.8, edgecolor='white')
-        
-        # 添加数据标签
-        for i, bar in enumerate(bars):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2, height + 5,
-                   f'{avg_efficiency[i]:.1f}\n±{std_efficiency[i]:.1f}', 
-                   ha='center', va='bottom', fontweight='bold', fontsize=9)
+        for i, method in enumerate(method_names):
+            avg_flops = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_flops.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_flops, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
         
         ax.set_ylabel('Tokens per Joule', fontweight='bold')
         ax.set_title('Energy Efficiency: Tokens per Joule', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
-        ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
+        ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(0, max(avg_efficiency) * 1.3 if avg_efficiency else 100)
+        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _plot_energy_breakdown(self, methods, ax):
         """绘制能耗分解（GPU/CPU/DRAM）"""
-        data_by_method = defaultdict(lambda: {'gpu': [], 'cpu': [], 'dram': []})
+        data_by_method = defaultdict(lambda: defaultdict(lambda: {'gpu': [], 'cpu': [], 'dram': []}))
         
         for exp_key, exp_data in self.aggregated_data.items():
             method = exp_data['method']
             if method not in methods:
                 continue
-            
+            task = exp_data['task']
             if 'power_summary' in exp_data and exp_data['power_summary']:
                 summary = exp_data['power_summary']
-                data_by_method[method]['gpu'].append(summary['gpu_energy_fraction'])
-                data_by_method[method]['cpu'].append(summary['cpu_energy_fraction'])
-                data_by_method[method]['dram'].append(summary['dram_energy_fraction'])
+                data_by_method[method][task]['gpu'].append(summary['gpu_energy_fraction'])
+                data_by_method[method][task]['cpu'].append(summary['cpu_energy_fraction'])
+                data_by_method[method][task]['dram'].append(summary['dram_energy_fraction'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No energy breakdown data available', ha='center', va='center')
@@ -946,48 +1082,50 @@ class InfrastructureAnalyzer:
         
         # 准备数据
         method_names = list(data_by_method.keys())
-        x = np.arange(len(method_names))
-        width = 0.6
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
         
-        # GPU部分
-        gpu_means = [np.mean(data_by_method[method]['gpu']) for method in method_names]
-        bottom = np.zeros(len(method_names))
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
+        max_val = 0.0
+        for i, method in enumerate(method_names):
+            power = defaultdict(lambda: {'gpu': [], 'cpu': [], 'dram': []})
+            for task in tasks:
+                for part in ['cpu', 'dram', 'gpu']:
+                    values = data_by_method[method].get(task).get(part)
+                    power[part].append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+
+            # GPU部分
+            bottom = np.zeros(len(tasks))
+            gpu_bars = ax.bar(x + offset, power['gpu'], bottom=bottom, 
+                         label='GPU Energy',
+                         color='#FF6B6B',
+                         alpha=0.8)
+            bottom += power['gpu']
+            
+            # CPU部分
+            cpu_bars = ax.bar(x + offset, power['cpu'], bottom=bottom, 
+                         label='CPU Energy',
+                         color='#4ECDC4',
+                         alpha=0.8, edgecolor='white')
+            bottom += power['cpu']
+            
+            # DRAM部分
+            dram_bars = ax.bar(x + offset, power['dram'], bottom=bottom, 
+                         label='DRAM Energy', color='#45B7D1', alpha=0.8)
+            
+            max_val = max(max_val, max(list(np.array(power['cpu']) + np.array(power['gpu']) + np.array(power['dram']))))
+
         
-        gpu_bars = ax.bar(x, gpu_means, width, bottom=bottom, 
-                         label='GPU Energy', color='#FF6B6B', alpha=0.8)
-        bottom += gpu_means
-        
-        # CPU部分
-        cpu_means = [np.mean(data_by_method[method]['cpu']) for method in method_names]
-        cpu_bars = ax.bar(x, cpu_means, width, bottom=bottom, 
-                         label='CPU Energy', color='#4ECDC4', alpha=0.8)
-        bottom += cpu_means
-        
-        # DRAM部分
-        dram_means = [np.mean(data_by_method[method]['dram']) for method in method_names]
-        dram_bars = ax.bar(x, dram_means, width, bottom=bottom, 
-                          label='DRAM Energy', color='#45B7D1', alpha=0.8)
-        
-        # 添加数据标签
-        for i, (gpu, cpu, dram) in enumerate(zip(gpu_means, cpu_means, dram_means)):
-            total = gpu + cpu + dram
-            if gpu > 0.1:
-                ax.text(x[i], gpu/2, f'GPU: {gpu:.1%}', 
-                       ha='center', va='center', color='white', fontweight='bold', fontsize=8)
-            if cpu > 0.1:
-                ax.text(x[i], gpu + cpu/2, f'CPU: {cpu:.1%}', 
-                       ha='center', va='center', color='white', fontweight='bold', fontsize=8)
-            if dram > 0.1:
-                ax.text(x[i], gpu + cpu + dram/2, f'DRAM: {dram:.1%}', 
-                       ha='center', va='center', color='white', fontweight='bold', fontsize=8)
-        
-        ax.set_ylabel('Energy Fraction', fontweight='bold')
+        ax.set_ylabel('Energy Consumption (Joule)', fontweight='bold')
         ax.set_title('Energy Consumption Breakdown', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
-        ax.set_xticklabels([method.upper() for method in method_names])
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(0, 1.1)
+        print(f"data_by_method: {data_by_method['latent_mas'].values()} and {data_by_method['text_mas'].values()}")
+        ax.set_ylim(0, max_val * 1.3)
     
     def _plot_cost_analysis(self, methods, ax):
         """绘制成本分析"""
@@ -1087,8 +1225,8 @@ class InfrastructureAnalyzer:
                         cpu_ratio = cpu_time / total_time if total_time > 0 else 0
                         gpu_ratio = gpu_time / total_time if total_time > 0 else 0
                         
-                        agent_data[method][agent_name]['cpu'].append(cpu_ratio)
-                        agent_data[method][agent_name]['gpu'].append(gpu_ratio)
+                        agent_data[method][agent_name]['cpu'].append(cpu_time)
+                        agent_data[method][agent_name]['gpu'].append(gpu_time)
         
         if not agent_data:
             ax.text(0.5, 0.5, 'No agent computation data available', ha='center', va='center')
@@ -1101,7 +1239,7 @@ class InfrastructureAnalyzer:
         
         x = np.arange(len(agent_names))
         width = 0.8 / len(method_names)
-        
+        max_val = 0.0
         for i, method in enumerate(method_names):
             cpu_ratios = []
             gpu_ratios = []
@@ -1115,7 +1253,9 @@ class InfrastructureAnalyzer:
                 else:
                     cpu_ratios.append(0)
                     gpu_ratios.append(0)
-            
+
+            max_val = max(max_val, max(c for c in list(np.array(cpu_ratios) + np.array(gpu_ratios))))
+
             offset = i * width - (len(method_names) - 1) * width / 2
             bottom = np.zeros(len(agent_names))
             
@@ -1146,13 +1286,13 @@ class InfrastructureAnalyzer:
                         ax.text(x[j] + offset, bottom[j] - gpu/2, f'GPU:{gpu_pct:.0f}%', 
                                ha='center', va='center', fontsize=6, color='white')
         
-        ax.set_ylabel('Time Ratio', fontweight='bold')
+        ax.set_ylabel('Service Time (s)', fontweight='bold')
         ax.set_title('Agent Computation Time Breakdown', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels(agent_names, rotation=45, ha='right')
-        ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.0))
+        ax.legend(loc='upper right', ncol = 2)
         ax.grid(axis='y', alpha=0.3)
-        ax.set_ylim(0, 1.1)
+        ax.set_ylim(0, 1.3*max_val)
     
     def _plot_agent_memory_usage(self, methods, ax):
         """绘制Agent内存使用情况"""
@@ -1201,7 +1341,7 @@ class InfrastructureAnalyzer:
                     vram_means.append(0)
                     ram_means.append(0)
             
-            max_value = max(max_value, max(vram_means), max(ram_means))
+            max_value = max(max_value, max(c for c in list(np.array(vram_means) + np.array(ram_means))))
             
             offset = i * width - (len(method_names) - 1) * width / 2
             
@@ -1230,7 +1370,7 @@ class InfrastructureAnalyzer:
         ax.set_title('Agent Memory Usage Comparison', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels(agent_names, rotation=45, ha='right')
-        ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.0))
+        ax.legend(loc='upper right', ncol = 2)
         ax.grid(axis='y', alpha=0.3)
         ax.set_ylim(0, max_value * 1.3 if max_value > 0 else 24)
     
@@ -1293,7 +1433,7 @@ class InfrastructureAnalyzer:
         ax.set_title('Agent Power Consumption Comparison', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels(agent_names, rotation=45, ha='right')
-        ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.0))
+        ax.legend(loc='upper right', ncol = 2)
         ax.grid(axis='y', alpha=0.3)
 
         print(f"max_val: {max_val}")
@@ -1358,7 +1498,7 @@ class InfrastructureAnalyzer:
         ax.set_title('Agent Energy Efficiency', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels(agent_names, rotation=45, ha='right')
-        ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.0))
+        ax.legend(loc='upper right', ncol = 2)
         ax.grid(axis='y', alpha=0.3)
         ax.set_ylim(0, max_val * 1.3)
     
