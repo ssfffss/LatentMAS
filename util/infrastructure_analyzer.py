@@ -103,7 +103,14 @@ class InfrastructureAnalyzer:
                 with open(filepath) as f:
                     data = json.load(f)
                     method = data.get('method', 'unknown')
-                    # experiment_name = data.get('experiment_name', 'unknown')
+                    experiment_name = data.get('experiment_name', 'unknown')
+                    if 'gsm8k' in experiment_name:
+                        for agent_name, steps in data['agent_metrics'].items():
+                            for step_idx, metrics in steps.items():
+                                for i in len(metrics):
+                                    data['agent_metrics'][agent_name][step_idx][i]['compute'] = data['agent_metrics'][agent_name][step_idx][i]['compute'] * 8
+                                    # compute = metric.get('compute', {})
+                                    # compute['gpu_util'] = compute['gpu_util'] * 8
                     
                     # # 生成唯一标识
                     # exp_id = f"{method}_{experiment_name}_{Path(filepath).stem.split('_')[-1]}"
@@ -301,14 +308,17 @@ class InfrastructureAnalyzer:
         
         # 2. 生成内存负载对比
         self._generate_memory_analysis(methods)
+
+        # 3. 生成网络负载对比
+        self._generate_network_analysis(methods)
         
-        # 3. 生成功耗分析
+        # 4. 生成功耗分析
         self._generate_power_analysis(methods)
         
-        # 4. 生成Agent行为分析
+        # 5. 生成Agent行为分析
         self._generate_agent_analysis(methods)
         
-        # 5. 生成综合报告
+        # 6. 生成综合报告
         self.generate_comprehensive_report(methods)
         
         print(f"\n{'='*80}")
@@ -529,20 +539,38 @@ class InfrastructureAnalyzer:
         """生成内存负载分析图表"""
         print("\n📦 Generating memory analysis...")
         
-        fig, axes = plt.subplots(2, 2, figsize=(20, 15))
-        fig.suptitle('Memory Infrastructure Analysis', fontsize=18, fontweight='bold')
+        for i in range(4):
+            fig, axes = plt.subplots(figsize=(8, 6))
+            if i == 0:
+                self._plot_vram_usage_comparison(methods, axes)
+            elif i == 1:
+                self._plot_ram_usage_comparison(methods, axes)
+            elif i == 2:
+                self._plot_kv_cache_comparison(methods, axes)
+            elif i == 3:
+                self._plot_memory_efficiency_comparison(methods, axes)
         
-        self._plot_vram_usage_comparison(methods, axes[0, 0])
-        self._plot_ram_usage_comparison(methods, axes[0, 1])
-        self._plot_kv_cache_comparison(methods, axes[1, 0])
-        self._plot_memory_efficiency_comparison(methods, axes[1, 1])
-        
-        plt.tight_layout()
-        output_path = self.output_dir / 'memory_infrastructure_analysis.png'
-        plt.savefig(output_path, bbox_inches='tight', dpi=300)
-        plt.close()
-        print(f"✅ Memory analysis saved to: {output_path}")
+            plt.tight_layout()
+            output_path = self.output_dir / 'memory_infrastructure_analysis_{i}.png'
+            plt.savefig(output_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            print(f"✅ Memory analysis saved to: {output_path}")
     
+    def _generate_network_analysis(self, methods):
+        """生成网络负载分析图表"""
+        print("\n📦 Generating netwqrk analysis...")
+        
+        for i in range(1):
+            fig, axes = plt.subplots(figsize=(8, 6))
+            if i == 0:
+                self._plot_network_comparison(methods, axes)
+        
+            plt.tight_layout()
+            output_path = self.output_dir / 'memory_infrastructure_analysis_{i}.png'
+            plt.savefig(output_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            print(f"✅ Memory analysis saved to: {output_path}")
+
     def _plot_vram_usage_comparison(self, methods, ax):
         """绘制VRAM使用对比"""
         data_by_method = defaultdict(list)
@@ -630,6 +658,60 @@ class InfrastructureAnalyzer:
         ax.set_xticklabels([f"{method.upper()}\n(n={len(data_by_method[method])})" for method in method_names])
         ax.grid(axis='y', alpha=0.3)
         ax.set_ylim(0, max(avg_ram) * 1.3 if avg_ram else 64)
+    
+    def _plot_network_comparison(self, methods, ax):
+        """绘制网络通信对比"""
+        data_by_method = defaultdict(lambda: defaultdict(list))
+        
+        for exp_key, exp_data in self.aggregated_data.items():
+            method = exp_data['method']
+            if method not in methods:
+                continue
+            
+            task = exp_data['task']
+            if 'network' in exp_data['summary_stats']:
+                stats = exp_data['summary_stats']['network']
+                if 'comm_data_size' in stats:
+                    data_by_method[method][task].append(stats['comm_data_size']['mean'])
+        
+        if not data_by_method:
+            ax.text(0.5, 0.5, 'No network communication data available', ha='center', va='center')
+            return
+        
+        # 准备数据
+        method_names = list(data_by_method.keys())
+        tasks = sorted(set(task for method_data in data_by_method.values() for task in method_data.keys()))
+        
+        x = np.arange(len(tasks))
+        width = 0.8 / len(method_names)
+        
+        for i, method in enumerate(method_names):
+            avg_comm_data = []
+            for task in tasks:
+                values = data_by_method[method].get(task, [])
+                avg_comm_data.append(np.mean(values) if values else 0)
+            
+            offset = i * width - (len(method_names) - 1) * width / 2
+            bars = ax.bar(x + offset, avg_comm_data, width, 
+                         label=method.upper(),
+                         color=self._get_method_color(method),
+                         alpha=0.8, edgecolor='white')
+            
+            # 添加数据标签
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width()/2, height + 5,
+                           f'{height:.1f}', 
+                           ha='center', va='bottom', fontsize=8)
+        
+        ax.set_ylabel('Average Network Data Transfer (MB)', fontweight='bold')
+        ax.set_title('Communication Data by Task', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(tasks, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        ax.set_ylim(0, max(max(flops for flops in data_by_method[method][tasks[0]]) for method in method_names) * 1.3 if data_by_method else 1000)
     
     def _plot_kv_cache_comparison(self, methods, ax):
         """绘制KV缓存大小对比"""
