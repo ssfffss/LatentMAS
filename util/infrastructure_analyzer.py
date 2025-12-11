@@ -551,7 +551,7 @@ class InfrastructureAnalyzer:
                 self._plot_memory_efficiency_comparison(methods, axes)
         
             plt.tight_layout()
-            output_path = self.output_dir / 'memory_infrastructure_analysis_{i}.png'
+            output_path = self.output_dir / f'memory_infrastructure_analysis_{i}.png'
             plt.savefig(output_path, bbox_inches='tight', dpi=300)
             plt.close()
             print(f"✅ Memory analysis saved to: {output_path}")
@@ -566,7 +566,7 @@ class InfrastructureAnalyzer:
                 self._plot_network_comparison(methods, axes)
         
             plt.tight_layout()
-            output_path = self.output_dir / 'memory_infrastructure_analysis_{i}.png'
+            output_path = self.output_dir / f'network_infrastructure_analysis_{i}.png'
             plt.savefig(output_path, bbox_inches='tight', dpi=300)
             plt.close()
             print(f"✅ Memory analysis saved to: {output_path}")
@@ -1047,19 +1047,22 @@ class InfrastructureAnalyzer:
         """生成Agent行为分析图表"""
         print("\n🤖 Generating agent analysis...")
         
-        fig, axes = plt.subplots(2, 2, figsize=(20, 15))
-        fig.suptitle('Multi-Agent Behavior Analysis', fontsize=18, fontweight='bold')
-        
-        self._plot_agent_computation_breakdown(methods, axes[0, 0])
-        self._plot_agent_memory_usage(methods, axes[0, 1])
-        self._plot_agent_power_consumption(methods, axes[1, 0])
-        self._plot_agent_efficiency(methods, axes[1, 1])
-        
-        plt.tight_layout()
-        output_path = self.output_dir / 'agent_behavior_analysis.png'
-        plt.savefig(output_path, bbox_inches='tight', dpi=300)
-        plt.close()
-        print(f"✅ Agent analysis saved to: {output_path}")
+        for i in range(4):
+            fig, axes = plt.subplots(figsize=(8, 6))
+            if i == 0:
+                self._plot_agent_computation_breakdown(methods, axes)
+            elif i == 1:
+                self._plot_agent_memory_usage(methods, axes)
+            elif i == 2:
+                self._plot_agent_power_consumption(methods, axes)
+            elif i == 3:
+                self._plot_agent_efficiency(methods, axes)
+            
+            plt.tight_layout()
+            output_path = self.output_dir / f'agent_behavior_analysis_{i}.png'
+            plt.savefig(output_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            print(f"✅ Agent analysis saved to: {output_path}")
     
     def _plot_agent_computation_breakdown(self, methods, ax):
         """绘制Agent计算时间分解"""
