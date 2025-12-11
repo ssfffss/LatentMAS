@@ -320,19 +320,22 @@ class InfrastructureAnalyzer:
         """生成计算负载分析图表"""
         print("\n⚡ Generating compute analysis...")
         
-        fig, axes = plt.subplots(2, 2, figsize=(20, 15))
-        fig.suptitle('Compute Infrastructure Analysis', fontsize=18, fontweight='bold')
-        
-        self._plot_inference_time_comparison(methods, axes[0, 0])
-        self._plot_gpu_utilization_comparison(methods, axes[0, 1])
-        self._plot_tokens_per_second_comparison(methods, axes[1, 0])
-        self._plot_flops_efficiency_comparison(methods, axes[1, 1])
-        
-        plt.tight_layout()
-        output_path = self.output_dir / 'compute_infrastructure_analysis.png'
-        plt.savefig(output_path, bbox_inches='tight', dpi=300)
-        plt.close()
-        print(f"✅ Compute analysis saved to: {output_path}")
+        for i in range(4):
+            fig, axes = plt.subplots(figsize=(8, 6))
+            if i == 0:
+                self._plot_inference_time_comparison(methods, axes)
+            elif i == 1:
+                self._plot_gpu_utilization_comparison(methods, axes)
+            elif i == 2:
+                self._plot_tokens_per_second_comparison(methods, axes)
+            elif i == 3:
+                self._plot_flops_efficiency_comparison(methods, axes)
+            
+            plt.tight_layout()
+            output_path = self.output_dir / f'compute_infrastructure_analysis_{i}.png'
+            plt.savefig(output_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            print(f"✅ Compute analysis saved to: {output_path}")
     
     def _plot_inference_time_comparison(self, methods, ax):
         """绘制推理时间对比"""
@@ -737,19 +740,21 @@ class InfrastructureAnalyzer:
             print("⚠️  No power data available for analysis")
             return
         
-        fig, axes = plt.subplots(2, 2, figsize=(20, 15))
-        fig.suptitle('Power Consumption Analysis', fontsize=18, fontweight='bold')
-        
-        self._plot_energy_consumption(methods, axes[0, 0])
-        self._plot_power_efficiency(methods, axes[0, 1])
-        self._plot_energy_breakdown(methods, axes[1, 0])
-        self._plot_cost_analysis(methods, axes[1, 1])
-        
-        plt.tight_layout()
-        output_path = self.output_dir / 'power_consumption_analysis.png'
-        plt.savefig(output_path, bbox_inches='tight', dpi=300)
-        plt.close()
-        print(f"✅ Power analysis saved to: {output_path}")
+        for i in range(4):
+            fig, axes = plt.subplots(figsize=(8, 6))    
+            if i == 0:        
+                self._plot_energy_consumption(methods, axes)
+            elif i == 1:
+                self._plot_power_efficiency(methods, axes)
+            elif i == 2:
+                self._plot_energy_breakdown(methods, axes)
+            elif i == 3:
+                self._plot_cost_analysis(methods, axes)
+            plt.tight_layout()
+            output_path = self.output_dir / f'power_consumption_analysis_{i}.png'
+            plt.savefig(output_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            print(f"✅ Power analysis saved to: {output_path}")
     
     def _plot_energy_consumption(self, methods, ax):
         """绘制能耗对比"""

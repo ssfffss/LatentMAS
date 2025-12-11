@@ -179,7 +179,7 @@ class InfrastructureMonitor:
         except Exception as e:
             print(f"Warning: GPU monitoring initialization failed: {e}")
     
-    def _get_gpu_metrics(self, gpu_selected_ids: list = None) -> Dict[str, float]:
+    def _get_gpu_metrics(self, gpu_selected_ids: list = [0]) -> Dict[str, float]:
         """获取GPU指标 - 支持多GPU聚合"""
         if gpu_selected_ids is None:
             gpu_selected_ids = list(range(len(self.gpu_handles)))
