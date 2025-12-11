@@ -876,9 +876,8 @@ class InfrastructureAnalyzer:
             task = exp_data['task']
             if 'compute' in exp_data['summary_stats']:
                 stats = exp_data['summary_stats']['compute']
-                if 'avg_gpu_mem_used' in stats:
-                    data_by_method[method][task].append(stats['avg_gpu_mem_used']['mean'])
-
+                if 'gpu_mem_used' in stats:
+                    data_by_method[method][task].append(stats['gpu_mem_used']['mean'])
         
         if not data_by_method:
             ax.text(0.5, 0.5, 'No memory efficiency data available', ha='center', va='center')
@@ -1092,21 +1091,21 @@ class InfrastructureAnalyzer:
 
             # GPU部分
             bottom = np.zeros(len(tasks))
-            gpu_bars = ax.bar(x + offset, power['gpu'], bottom=bottom, 
+            gpu_bars = ax.bar(x + offset, power['gpu'], width, bottom=bottom, 
                          label='GPU Energy',
                          color='#FF6B6B',
                          alpha=0.8)
             bottom += power['gpu']
             
             # CPU部分
-            cpu_bars = ax.bar(x + offset, power['cpu'], bottom=bottom, 
+            cpu_bars = ax.bar(x + offset, power['cpu'], width, bottom=bottom, 
                          label='CPU Energy',
                          color='#4ECDC4',
                          alpha=0.8, edgecolor='white')
             bottom += power['cpu']
             
             # DRAM部分
-            dram_bars = ax.bar(x + offset, power['dram'], bottom=bottom, 
+            dram_bars = ax.bar(x + offset, power['dram'], width, bottom=bottom, 
                          label='DRAM Energy', color='#45B7D1', alpha=0.8)
             
             max_val = max(max_val, max(list(np.array(power['cpu']) + np.array(power['gpu']) + np.array(power['dram']))))
@@ -1145,7 +1144,7 @@ class InfrastructureAnalyzer:
         # 准备数据
         method_names = list(data_by_method.keys())
         costs_per_year = []
-        
+        max_val = 0.0
         for method in method_names:
             avg_energy_per_sample = np.mean(data_by_method[method]) / samples_per_day
             yearly_energy_kwh = (avg_energy_per_sample * samples_per_day * days_per_year) / 3600000
@@ -1162,7 +1161,7 @@ class InfrastructureAnalyzer:
         # 添加数据标签
         for i, bar in enumerate(bars):
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2, height + 100,
+            ax.text(bar.get_x() + bar.get_width()/2, height /2,
                    f'${height:,.0f}', 
                    ha='center', va='bottom', fontweight='bold', fontsize=9)
         
