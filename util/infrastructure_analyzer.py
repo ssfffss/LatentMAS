@@ -1088,7 +1088,7 @@ class InfrastructureAnalyzer:
         width = 0.8 / len(method_names)
         max_val = 0.0
         for i, method in enumerate(method_names):
-            power = defaultdict(lambda: {'gpu': [], 'cpu': [], 'dram': []})
+            power = {'gpu': [], 'cpu': [], 'dram': []}
             for task in tasks:
                 for part in ['cpu', 'dram', 'gpu']:
                     values = data_by_method[method].get(task).get(part)
