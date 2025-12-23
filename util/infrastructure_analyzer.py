@@ -1442,13 +1442,13 @@ class InfrastructureAnalyzer:
 
             for agent_name, steps in exp_data['agent_metrics'].items():
                 total_energy = 0.0
-                total_tokens = 0.0
+                total_samples = 0.0
                 for step_idx, metrics in steps.items():
                     for metric in metrics:
                         power_metrics = metric.get('power', {})
                         total_energy += power_metrics['total_energy_consumed']
-                        total_tokens += power_metrics['total_energy_consumed'] * power_metrics['avg_tokens_per_joule']
-                agent_data[method][agent_name].append(total_tokens/total_energy if total_energy > 0 else 0)
+                        total_samples += power_metrics['total_energy_consumed'] * power_metrics['avg_samples_per_joule']
+                agent_data[method][agent_name].append(total_samples/total_energy if total_energy > 0 else 0)
         
         if not agent_data:
             ax.text(0.5, 0.5, 'No agent efficiency data available', ha='center', va='center')
@@ -1486,7 +1486,7 @@ class InfrastructureAnalyzer:
                            f'{height:.0f}', 
                            ha='center', va='bottom', fontsize=8)
         
-        ax.set_ylabel('Tokens per Joule', fontweight='bold')
+        ax.set_ylabel('Samples per Joule', fontweight='bold')
         ax.set_title('Agent Energy Efficiency', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels(agent_names, rotation=45, ha='right')
@@ -1717,7 +1717,7 @@ class InfrastructureAnalyzer:
             
             if 'power_summary' in exp_data and exp_data['power_summary']:
                 summary = exp_data['power_summary']
-                energy_efficiency[method].append(summary.get('avg_tokens_per_joule', 0))
+                energy_efficiency[method].append(summary.get('avg_samples_per_joule', 0))
                 total_energy[method].append(summary.get('total_energy_consumed', 0))
         
         if energy_efficiency:
@@ -1727,7 +1727,7 @@ class InfrastructureAnalyzer:
             if most_efficient != least_efficient:
                 insights.append(
                     f"{most_efficient.upper()} achieves {np.mean(energy_efficiency[most_efficient])/np.mean(energy_efficiency[least_efficient]):.1f}x "
-                    f"better energy efficiency (tokens/joule) than {least_efficient.upper()}"
+                    f"better energy efficiency (samples/joule) than {least_efficient.upper()}"
                 )
         
         if total_energy:

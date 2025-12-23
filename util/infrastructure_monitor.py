@@ -179,7 +179,7 @@ class InfrastructureMonitor:
         except Exception as e:
             print(f"Warning: GPU monitoring initialization failed: {e}")
     
-    def _get_gpu_metrics(self, gpu_selected_ids: list = [0]) -> Dict[str, float]:
+    def _get_gpu_metrics(self, gpu_selected_ids: list = [0,1]) -> Dict[str, float]:
         """获取GPU指标 - 支持多GPU聚合"""
         if gpu_selected_ids is None:
             gpu_selected_ids = list(range(len(self.gpu_handles)))
@@ -210,7 +210,7 @@ class InfrastructureMonitor:
                 except Exception as e:
                     print(f"Warning: Failed to get metrics for GPU {i}: {e}")
             
-            avg_util = total_util / len(gpu_selected_ids) if gpu_selected_ids else 0.0
+            avg_util = total_util # / len(gpu_selected_ids) if gpu_selected_ids else 0.0
             
             return {
                 'gpu_util': avg_util,
@@ -306,7 +306,7 @@ class InfrastructureMonitor:
             print(f"Error measuring CPU power: {e}")
             return 0.0, 0.0
     
-    def _get_gpu_power_metrics(self, gpu_ids: list = [0]) -> Dict[int, Dict]:
+    def _get_gpu_power_metrics(self, gpu_ids: list = [0, 1]) -> Dict[int, Dict]:
         """获取指定GPU的功耗指标"""
         if gpu_ids is None:
             gpu_ids = list(range(len(self.gpu_handles)))
@@ -340,13 +340,12 @@ class InfrastructureMonitor:
         # 获取GPU功耗
         gpu_power_metrics = self._get_gpu_power_metrics()
         gpu_power = sum(power['gpu_power_draw'] for power in gpu_power_metrics.values()) if gpu_power_metrics else 0.0
-        gpu_count = len(gpu_power_metrics) if gpu_power_metrics else 1
         
         # 应用基准校正
         if hasattr(self, 'power_base') and self.power_base is not None:
             cpu_power = max(cpu_power - self.power_base['cpu_power'], 0)
             dram_power = max(dram_power - self.power_base['dram_power'], 0)
-            gpu_power = max(gpu_power / gpu_count - self.power_base['gpu_power'], 0)
+            gpu_power = max(gpu_power - self.power_base['gpu_power'], 0)
         
         return {
             'cpu_power': cpu_power,
